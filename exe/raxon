@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+
+require "raxon/cli"
+
+Raxon::CLI.start(ARGV)

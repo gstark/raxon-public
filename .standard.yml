@@ -1,0 +1,18 @@
+# Standard Ruby configuration
+# https://github.com/standardrb/standard
+
+# Ruby version to use for linting
+ruby_version: "3.4"
+
+# Directories to ignore
+ignore:
+  - "vendor/**/*"
+  - "node_modules/**/*"
+  - "tmp/**/*"
+  - "db/schema.rb"
+
+# Enable/disable auto-correction
+fix: false
+
+# Parallel execution
+parallel: true
