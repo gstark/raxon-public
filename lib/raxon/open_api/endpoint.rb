@@ -203,6 +203,24 @@ module Raxon
         yield @responses[status] if block_given?
       end
 
+      # Define a standard exception error response for this endpoint.
+      # This is a convenience method for the common error response pattern with
+      # status, error_message, and errors properties.
+      #
+      # @param status [Symbol, Integer] HTTP status code (default: :unprocessable_entity)
+      # @param description [String] Response description (default: "Validation error")
+      #
+      # @example
+      #   endpoint.exception_error
+      #   endpoint.exception_error :bad_request, description: "Invalid request"
+      def exception_error(status = :unprocessable_entity, description: "Validation error")
+        response(status, type: :object, description: description) do |resp|
+          resp.property :status, type: :string, description: "Status of the request"
+          resp.property :error_message, type: :string, description: "Error message"
+          resp.property :errors, type: :object, description: "Validation errors"
+        end
+      end
+
       # Set the request handler for this endpoint.
       #
       # Extends the block's binding context with HandlerHelpers so that all
