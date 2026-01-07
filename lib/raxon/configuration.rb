@@ -1,7 +1,7 @@
 module Raxon
   # Configuration for Raxon applications
   class Configuration
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :on_error, :helpers_path, :root
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :on_error, :helpers_path, :root, :rails_compatible_instrumentation
 
     def initialize
       @routes_directory = ENV.fetch("RAXON_ROUTES_DIR", "routes")
@@ -11,6 +11,7 @@ module Raxon
       @on_error = nil
       @helpers_path = nil
       @root = nil
+      @rails_compatible_instrumentation = false
       @before_blocks = []
       @after_blocks = []
       @around_blocks = []

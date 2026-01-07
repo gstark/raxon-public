@@ -142,8 +142,19 @@ module Raxon
         proc { around_block.call(request, response, metadata, &inner) }
       end
 
+      # Wrap with instrumentation if enabled
+      instrumented_execution = if config.rails_compatible_instrumentation
+        proc do
+          Instrumentation.instrument_request(request, response, handler_endpoint) do
+            wrapped_execution.call
+          end
+        end
+      else
+        wrapped_execution
+      end
+
       begin
-        wrapped_execution.call
+        instrumented_execution.call
       rescue Raxon::HaltException
         raise # Let HaltException propagate (flow control)
       rescue => exception

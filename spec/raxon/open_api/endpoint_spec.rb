@@ -54,6 +54,35 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     end
   end
 
+  describe "#exception_error" do
+    it "adds a standard error response with default status" do
+      endpoint = described_class.new
+      endpoint.exception_error
+
+      response = endpoint.responses[:unprocessable_entity]
+      expect(response).to be_a(Raxon::OpenApi::Response)
+      expect(response.type).to eq("object")
+      expect(response.description).to eq("Validation error")
+      expect(response.properties.keys).to contain_exactly(:status, :error_message, :errors)
+    end
+
+    it "accepts custom status code" do
+      endpoint = described_class.new
+      endpoint.exception_error :bad_request
+
+      expect(endpoint.responses[:bad_request]).to be_a(Raxon::OpenApi::Response)
+      expect(endpoint.responses[:unprocessable_entity]).to be_nil
+    end
+
+    it "accepts custom description" do
+      endpoint = described_class.new
+      endpoint.exception_error description: "Invalid request format"
+
+      response = endpoint.responses[:unprocessable_entity]
+      expect(response.description).to eq("Invalid request format")
+    end
+  end
+
   describe "#before" do
     it "stores the before block in the before_blocks array" do
       endpoint = described_class.new

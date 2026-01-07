@@ -38,6 +38,11 @@ RSpec.describe Raxon::Configuration do
       config = Raxon::Configuration.new
       expect(config.root).to be_nil
     end
+
+    it "sets rails_compatible_instrumentation to false by default" do
+      config = Raxon::Configuration.new
+      expect(config.rails_compatible_instrumentation).to eq(false)
+    end
   end
 
   describe "#on_error" do
