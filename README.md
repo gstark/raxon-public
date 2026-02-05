@@ -78,17 +78,43 @@ curl http://localhost:9292/api/v1/ping
 
 Routes are automatically registered based on file paths and names:
 
-| File Path                         | HTTP Method | Route                |
-| --------------------------------- | ----------- | -------------------- |
-| `routes/api/v1/users/get.rb`      | GET         | `/api/v1/users`      |
-| `routes/api/v1/users/post.rb`     | POST        | `/api/v1/users`      |
-| `routes/api/v1/users/{id}/get.rb` | GET         | `/api/v1/users/{id}` |
-| `routes/api/v1/users/{id}/put.rb` | PUT         | `/api/v1/users/{id}` |
-| `routes/api/v1/all.rb`            | ALL         | `/api/v1/*`          |
+| File Path                              | HTTP Method | Route                |
+| -------------------------------------- | ----------- | -------------------- |
+| `routes/api/v1/users/get.rb`           | GET         | `/api/v1/users`      |
+| `routes/api/v1/users/post.rb`          | POST        | `/api/v1/users`      |
+| `routes/api/v1/users/__id__/get.rb`    | GET         | `/api/v1/users/{id}` |
+| `routes/api/v1/users/__id__/put.rb`    | PUT         | `/api/v1/users/{id}` |
+| `routes/api/v1/all.rb`                 | ALL         | `/api/v1/*`          |
 
 **Supported HTTP methods:** `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `all`
 
 **Special method:** `all.rb` files match all HTTP methods and are ideal for cross-cutting concerns like authentication, logging, and headers.
+
+#### Path Parameters
+
+Use double underscores (dunder syntax) to define dynamic path segments:
+
+```
+routes/api/v1/users/__id__/get.rb        → GET /api/v1/users/{id}
+routes/api/v1/orgs/__org_id__/get.rb     → GET /api/v1/orgs/{org_id}
+```
+
+The `$param` syntax is also supported for backwards compatibility, but dunder style is recommended as it avoids shell expansion issues:
+
+```
+routes/api/v1/users/$id/get.rb           → GET /api/v1/users/{id}
+```
+
+Path parameters are automatically extracted and available in `request.params`:
+
+```ruby
+endpoint.handler do |request, response|
+  user_id = request.params[:id]  # Extracted from URL path
+  response.body = { user_id: user_id }
+end
+```
+
+See [Path Parameters Documentation](docs/path_parameters.md) for more details.
 
 ### Request Handling
 

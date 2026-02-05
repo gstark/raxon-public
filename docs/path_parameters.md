@@ -8,19 +8,41 @@ Path parameters allow you to define dynamic segments in your route paths. Parame
 
 ## Syntax
 
-To define a path parameter, prefix a directory segment with a dollar sign (`$`):
+Two syntaxes are supported for defining path parameters:
+
+### Dunder Style (Recommended)
+
+Wrap the parameter name with double underscores:
+
+```
+routes/api/v1/users/__id__/get.rb
+```
+
+This is the recommended style as it avoids issues with shell expansion and works reliably across all tools.
+
+### Dollar Style
+
+Prefix a directory segment with a dollar sign (`$`):
 
 ```
 routes/api/v1/users/$id/get.rb
 ```
 
-This creates a route with the path `/api/v1/users/{id}` where `{id}` is a path parameter.
+**Note:** The dollar prefix can cause issues with some shells and tools that interpret `$` as variable expansion. The dunder style is preferred for new projects.
+
+Both syntaxes create a route with the path `/api/v1/users/{id}` where `{id}` is a path parameter.
 
 ## Examples
 
 ### Single Parameter
 
-**File structure:**
+**File structure (dunder style):**
+
+```
+routes/api/v1/users/__id__/get.rb
+```
+
+**File structure (dollar style):**
 
 ```
 routes/api/v1/users/$id/get.rb
@@ -55,7 +77,13 @@ end
 
 ### Multiple Parameters
 
-**File structure:**
+**File structure (dunder style):**
+
+```
+routes/api/v1/orgs/__org_id__/projects/__project_id__/get.rb
+```
+
+**File structure (dollar style):**
 
 ```
 routes/api/v1/orgs/$org_id/projects/$project_id/get.rb
@@ -98,8 +126,9 @@ request.params[:limit]   # "10" (from query string)
 
 ## OpenAPI Generation
 
-Routes with `$parameter` segments are automatically converted to OpenAPI format:
+Routes with `$parameter` or `__parameter__` segments are automatically converted to OpenAPI format:
 
+- `routes/api/v1/users/__id__/get.rb` → path: `/api/v1/users/{id}`
 - `routes/api/v1/users/$id/get.rb` → path: `/api/v1/users/{id}`
 - Parameters defined with `in: :path` appear in the OpenAPI specification
 - The generated OpenAPI documentation will show these as path parameters

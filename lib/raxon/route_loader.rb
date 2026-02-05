@@ -20,6 +20,10 @@ module Raxon
       #
       # This ensures all.rb routes are registered before method-specific routes.
       #
+      # Each route file is loaded in an isolated context (anonymous class) so that
+      # methods defined with `def` are scoped to that file and don't pollute the
+      # global namespace.
+      #
       # @return [Routes] The collection of registered routes
       # @example
       #   routes = Raxon::RouteLoader.load!
@@ -37,10 +41,43 @@ module Raxon
         end
 
         sorted_files.each do |file|
-          load file
+          load_route_in_isolation(file)
         end
 
         routes
+      end
+
+      # Load a route file in an isolated context.
+      #
+      # Creates an anonymous class for each route file and evaluates the file
+      # content within that class. This ensures that any methods defined with
+      # `def` become instance methods of the anonymous class rather than polluting
+      # the global namespace (main).
+      #
+      # The anonymous class includes HandlerHelpers, so shared helpers are available
+      # alongside file-specific methods.
+      #
+      # @param file [String] Path to the route file
+      # @return [void]
+      #
+      # @private
+      def load_route_in_isolation(file)
+        content = File.read(file)
+
+        # Create an isolated class for this route file
+        # Methods defined with `def` will become instance methods of this class
+        route_context = Class.new do
+          include Raxon::HandlerHelpers
+        end
+
+        # Store context in thread-local so register() can access it
+        Thread.current[:raxon_route_context] = route_context
+
+        # Evaluate file content in the class context
+        # Pass file path and line number for accurate stack traces
+        route_context.class_eval(content, file, 1)
+      ensure
+        Thread.current[:raxon_route_context] = nil
       end
 
       # Reset the routes collection to empty state.
@@ -81,6 +118,10 @@ module Raxon
         directory = Raxon.configuration.routes_directory
         extract_route_info(file_path, directory) => {path:, method:, param_names:}
 
+        # Capture the route context (anonymous class) for isolated method scoping
+        # This may be nil for programmatic registration (backwards compatibility)
+        route_context = Thread.current[:raxon_route_context]
+
         # Determine which HTTP methods to register for
         methods_to_register = if method == "all"
           ACTUAL_HTTP_METHODS
@@ -95,6 +136,9 @@ module Raxon
 
             # Pre-compile ERB template if it exists
             compile_erb_template(endpoint, file_path)
+
+            # Pass the route context to the endpoint for isolated execution
+            endpoint.route_context = route_context
 
             # Execute the block to configure the endpoint
             block.call(endpoint)
@@ -163,7 +207,7 @@ module Raxon
       #
       # Parses the file path to determine the HTTP method (from filename),
       # the API path (from directory structure), and any path parameters.
-      # Converts $param style parameters to {param} OpenAPI format.
+      # Converts $param or __param__ style parameters to {param} OpenAPI format.
       #
       # @param file_path [String] Absolute or relative path to the route file
       # @param routes_directory [String] The configured routes directory
@@ -173,6 +217,9 @@ module Raxon
       #   - :param_names [Array<String>] Names of path parameters
       # @example
       #   extract_route_info("routes/api/v1/users/$id/get.rb", "routes")
+      #   # => {path: "/api/v1/users/{id}", method: "get", param_names: ["id"]}
+      # @example
+      #   extract_route_info("routes/api/v1/users/__id__/get.rb", "routes")
       #   # => {path: "/api/v1/users/{id}", method: "get", param_names: ["id"]}
       #
       # @private
@@ -243,10 +290,11 @@ module Raxon
                             "Must be one of: #{VALID_HTTP_METHODS.join(", ")}"
       end
 
-      # Convert path parts, converting $param to {param} format.
+      # Convert path parts, converting $param or __param__ to {param} format.
       #
-      # Transforms path segments that start with $ (e.g., "$id") into OpenAPI
-      # parameter format (e.g., "{id}"). Collects the parameter names for later use.
+      # Transforms path segments that start with $ (e.g., "$id") or use dunder
+      # syntax (e.g., "__id__") into OpenAPI parameter format (e.g., "{id}").
+      # Collects the parameter names for later use.
       #
       # @param parts [Array<String>] Path segments (e.g., ["api", "v1", "users", "$id"])
       # @return [Array<(Array, Array)>] Tuple of:
@@ -255,13 +303,16 @@ module Raxon
       # @example
       #   convert_path_to_parts_with_params(["api", "v1", "users", "$id"])
       #   # => [["api", "v1", "users", "{id}"], ["id"]]
+      # @example
+      #   convert_path_to_parts_with_params(["api", "v1", "users", "__id__"])
+      #   # => [["api", "v1", "users", "{id}"], ["id"]]
       #
       # @private
       def convert_path_to_parts_with_params(parts)
         param_names = []
         path_parts = parts.map do |part|
-          if part.start_with?("$")
-            param_name = part[1..]
+          param_name = extract_param_name(part)
+          if param_name
             param_names << param_name
             "{#{param_name}}"
           else
@@ -270,6 +321,24 @@ module Raxon
         end
 
         [path_parts, param_names]
+      end
+
+      # Extract parameter name from a path segment.
+      #
+      # Supports two syntaxes:
+      # - Dollar prefix: $id, $user_id
+      # - Dunder (double underscore): __id__, __user_id__
+      #
+      # @param part [String] A path segment
+      # @return [String, nil] The parameter name if this is a parameter segment, nil otherwise
+      #
+      # @private
+      def extract_param_name(part)
+        if part.start_with?("$")
+          part[1..]
+        elsif part.start_with?("__") && part.end_with?("__") && part.length > 4
+          part[2..-3]
+        end
       end
 
       # Build the final URL path from path parts.

@@ -169,11 +169,12 @@ module Raxon
 
     def execute_with_hierarchy(request, response, handler_endpoint, endpoints, metadata = {})
       # Build metadata from parent to child, with later values overriding earlier ones
+      # Each endpoint's blocks execute in that endpoint's context instance,
+      # giving access to methods defined in that route file
       endpoints.each do |endpoint|
         if endpoint.has_metadata?
-          endpoint.metadata_blocks.each do |metadata_block|
-            metadata_block.call(request, response, metadata)
-          end
+          context = request.endpoint_context(endpoint)
+          endpoint.execute_metadata_blocks(context, request, response, metadata)
         end
       end
 
@@ -182,14 +183,14 @@ module Raxon
       # If halt is called, HaltException will be raised and caught by the caller
       endpoints.each do |endpoint|
         if endpoint.has_before?
-          endpoint.before_blocks.each do |before_block|
-            before_block.call(request, response, metadata)
-          end
+          context = request.endpoint_context(endpoint)
+          endpoint.execute_before_blocks(context, request, response, metadata)
         end
       end
 
       # Execute the final handler with the accumulated metadata
       # If halt was called in a before block, we never get here due to the exception
+      # call() handles validation and response validation around the handler
       if handler_endpoint.has_handler?
         handler_endpoint.call(request, response, metadata)
       end
@@ -199,9 +200,8 @@ module Raxon
       # If halt is called in an after block, HaltException will be raised and caught by the caller
       endpoints.reverse_each do |endpoint|
         if endpoint.has_after?
-          endpoint.after_blocks.each do |after_block|
-            after_block.call(request, response, metadata)
-          end
+          context = request.endpoint_context(endpoint)
+          endpoint.execute_after_blocks(context, request, response, metadata)
         end
       end
     end

@@ -25,6 +25,7 @@ module Raxon
       attr_accessor :method
       attr_accessor :route_file_path
       attr_accessor :erb_template
+      attr_accessor :route_context
 
       # Initialize a new endpoint with empty operations, responses, and parameters.
       # Can optionally specify path and method for routing purposes.
@@ -36,6 +37,7 @@ module Raxon
         @method = nil
         @route_file_path = nil
         @erb_template = nil
+        @route_context = nil
         @operations = []
         @responses = {}
         @parameters = Parameters.new
@@ -223,12 +225,16 @@ module Raxon
 
       # Set the request handler for this endpoint.
       #
-      # Extends the block's binding context with HandlerHelpers so that all
-      # helper methods are available when the handler executes.
+      # The handler block will be executed in the context of the route's isolated
+      # class instance, giving it access to:
+      # - Methods defined with `def` in the same route file
+      # - HandlerHelpers methods (included in the route context)
+      # - Instance variables shared with before/after blocks of the same endpoint
       #
-      # @yield [request, response] The handler block that processes requests
+      # @yield [request, response, metadata] The handler block that processes requests
       # @yieldparam request [Object] The request object (typically Rack::Request or Raxon::Request)
       # @yieldparam response [Object] The response object (Raxon::Response)
+      # @yieldparam metadata [Hash] The metadata hash built from route hierarchy
       #
       # @example
       #   endpoint.handler do |request, response|
@@ -236,13 +242,6 @@ module Raxon
       #     response.body = { success: true }
       #   end
       def handler(&block)
-        # Extend the block's binding self with HandlerHelpers
-        # This is done once at definition time, not on every execution
-        block_self = block.binding.eval("self")
-        unless block_self.singleton_class.include?(Raxon::HandlerHelpers)
-          block_self.extend(Raxon::HandlerHelpers)
-        end
-
         @handler_block = block
       end
 
@@ -338,7 +337,9 @@ module Raxon
         unless response.halted?
           # Execute the handler block if defined (can be absent for before-only endpoints)
           if @handler_block
-            execute_handler_with_helpers(request, response, metadata)
+            # Get the context instance from the request (shared with before/after blocks)
+            context_instance = request.endpoint_context(self)
+            execute_block_in_context(context_instance, @handler_block, request, response, metadata)
           end
         end
 
@@ -346,19 +347,116 @@ module Raxon
         validate_response_body(response)
       end
 
-      private
+      # Create a new instance of the route context class.
+      #
+      # The route context is an anonymous class that was created when the route
+      # file was loaded. It includes HandlerHelpers and any methods defined with
+      # `def` in the route file.
+      #
+      # For endpoints without a route context (e.g., programmatically created),
+      # returns an instance of a default context class that includes HandlerHelpers.
+      # This maintains backwards compatibility.
+      #
+      # @return [Object] An instance of the route context
+      def create_context_instance
+        if @route_context
+          @route_context.new
+        else
+          default_context_class.new
+        end
+      end
 
-      # Execute the handler block.
+      # Returns the default context class for endpoints without a route context.
       #
-      # The handler block was already extended with HandlerHelpers when it was
-      # defined via the handler() method, so we can just call it directly.
+      # This class includes HandlerHelpers, providing backwards compatibility
+      # for programmatically created endpoints.
       #
+      # @return [Class] The default context class
+      def default_context_class
+        @default_context_class ||= Class.new { include Raxon::HandlerHelpers }
+      end
+
+      # Execute metadata blocks in the given context instance.
+      #
+      # @param context_instance [Object, nil] The context instance for this request
       # @param request [Raxon::Request] The request object
       # @param response [Raxon::Response] The response object
-      # @param metadata [Hash] The metadata hash built from route hierarchy
+      # @param metadata [Hash] The metadata hash to populate
       # @return [void]
-      def execute_handler_with_helpers(request, response, metadata)
-        @handler_block.call(request, response, metadata)
+      def execute_metadata_blocks(context_instance, request, response, metadata)
+        return unless has_metadata?
+
+        @metadata_blocks.each do |block|
+          execute_block_in_context(context_instance, block, request, response, metadata)
+        end
+      end
+
+      # Execute before blocks in the given context instance.
+      #
+      # @param context_instance [Object, nil] The context instance for this request
+      # @param request [Raxon::Request] The request object
+      # @param response [Raxon::Response] The response object
+      # @param metadata [Hash] The metadata hash
+      # @return [void]
+      def execute_before_blocks(context_instance, request, response, metadata)
+        return unless has_before?
+
+        @before_blocks.each do |block|
+          execute_block_in_context(context_instance, block, request, response, metadata)
+        end
+      end
+
+      # Execute after blocks in the given context instance.
+      #
+      # @param context_instance [Object, nil] The context instance for this request
+      # @param request [Raxon::Request] The request object
+      # @param response [Raxon::Response] The response object
+      # @param metadata [Hash] The metadata hash
+      # @return [void]
+      def execute_after_blocks(context_instance, request, response, metadata)
+        return unless has_after?
+
+        @after_blocks.each do |block|
+          execute_block_in_context(context_instance, block, request, response, metadata)
+        end
+      end
+
+      # Execute the handler block in the given context instance.
+      #
+      # @param context_instance [Object, nil] The context instance for this request
+      # @param request [Raxon::Request] The request object
+      # @param response [Raxon::Response] The response object
+      # @param metadata [Hash] The metadata hash
+      # @return [void]
+      def execute_handler(context_instance, request, response, metadata)
+        return unless @handler_block
+
+        execute_block_in_context(context_instance, @handler_block, request, response, metadata)
+      end
+
+      private
+
+      # Execute a block in the given context instance.
+      #
+      # If a context instance is provided, uses instance_exec to run the block
+      # with `self` set to the context instance. This gives the block access to
+      # methods defined in the route file and instance variables.
+      #
+      # If no context instance is provided (backwards compatibility), calls the
+      # block directly.
+      #
+      # @param context_instance [Object, nil] The context instance
+      # @param block [Proc] The block to execute
+      # @param request [Raxon::Request] The request object
+      # @param response [Raxon::Response] The response object
+      # @param metadata [Hash] The metadata hash
+      # @return [void]
+      def execute_block_in_context(context_instance, block, request, response, metadata)
+        if context_instance
+          context_instance.instance_exec(request, response, metadata, &block)
+        else
+          block.call(request, response, metadata)
+        end
       end
 
       # Validate the response body against the schema for its status code.

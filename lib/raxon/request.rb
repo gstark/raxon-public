@@ -26,6 +26,20 @@ module Raxon
       @validation_errors = nil
       @validated_params = nil
       @json_parse_error = false
+      @endpoint_contexts = {}
+    end
+
+    # Get or create a context instance for an endpoint.
+    #
+    # Each endpoint's blocks (before, handler, after, metadata) execute in a
+    # context instance that provides access to methods defined in the route file.
+    # This method ensures the same instance is used for all blocks of a given
+    # endpoint during a single request, allowing instance variables to be shared.
+    #
+    # @param endpoint [Raxon::OpenApi::Endpoint] The endpoint to get context for
+    # @return [Object, nil] The context instance, or nil if endpoint has no route context
+    def endpoint_context(endpoint)
+      @endpoint_contexts[endpoint] ||= endpoint.create_context_instance
     end
 
     # Get request parameters with validation and type coercion.

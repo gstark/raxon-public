@@ -101,18 +101,15 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     end
 
     it "executes the before block before the handler" do
-      before_called = false
-      handler_called = false
+      call_order = []
 
       Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
         endpoint.response(200, type: :object)
         endpoint.before do |request, response|
-          before_called = true
-          expect(handler_called).to be false
+          call_order << :before
         end
         endpoint.handler do |request, response|
-          handler_called = true
-          expect(before_called).to be true
+          call_order << :handler
           response.code = :ok
           response.body = {success: true}
         end
@@ -121,8 +118,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
       env = Rack::MockRequest.env_for("/test")
       Raxon::Router.new.call(env)
 
-      expect(before_called).to be true
-      expect(handler_called).to be true
+      expect(call_order).to eq([:before, :handler])
     end
 
     it "allows the before block to access the request" do

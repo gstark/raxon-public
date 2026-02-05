@@ -64,6 +64,56 @@ RSpec.describe Raxon::RouteLoader do
       expect(route_data[:params]).to eq({user_id: "42", post_id: "99"})
     end
 
+    it "registers a route with dunder-style path parameters" do
+      file_path = "routes/api/v1/users/__id__/get.rb"
+      block = proc do |endpoint|
+        endpoint.description "Get user by ID (dunder syntax)"
+        endpoint.handler do |request, response|
+          response.code = :ok
+          response.body = {id: request.params[:id]}
+        end
+      end
+
+      Raxon::RouteLoader.register(file_path, &block)
+
+      route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users/456")
+      expect(route_data).not_to be_nil
+      endpoint = route_data[:endpoint]
+      expect(endpoint.path).to eq("/api/v1/users/{id}")
+      expect(endpoint.method).to eq("get")
+      expect(route_data[:params]).to eq({id: "456"})
+    end
+
+    it "registers a route with multiple dunder-style path parameters" do
+      file_path = "routes/api/v1/orgs/__org_id__/projects/__project_id__/get.rb"
+      block = proc do |endpoint|
+        endpoint.description "Get project by org and project ID"
+      end
+
+      Raxon::RouteLoader.register(file_path, &block)
+
+      route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/orgs/acme/projects/website")
+      expect(route_data).not_to be_nil
+      endpoint = route_data[:endpoint]
+      expect(endpoint.path).to eq("/api/v1/orgs/{org_id}/projects/{project_id}")
+      expect(route_data[:params]).to eq({org_id: "acme", project_id: "website"})
+    end
+
+    it "supports mixing dollar and dunder path parameter styles" do
+      file_path = "routes/api/v1/users/$user_id/posts/__post_id__/get.rb"
+      block = proc do |endpoint|
+        endpoint.description "Mixed parameter styles"
+      end
+
+      Raxon::RouteLoader.register(file_path, &block)
+
+      route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users/42/posts/99")
+      expect(route_data).not_to be_nil
+      endpoint = route_data[:endpoint]
+      expect(endpoint.path).to eq("/api/v1/users/{user_id}/posts/{post_id}")
+      expect(route_data[:params]).to eq({user_id: "42", post_id: "99"})
+    end
+
     it "raises an error for invalid HTTP method in filename" do
       invalid_file_path = "routes/api/v1/users/invalid_method.rb"
 
@@ -229,7 +279,7 @@ RSpec.describe Raxon::RouteLoader do
 
         # Track loading order
         load_order = []
-        allow(Raxon::RouteLoader).to receive(:load).and_wrap_original do |method, file|
+        allow(Raxon::RouteLoader).to receive(:load_route_in_isolation).and_wrap_original do |method, file|
           load_order << File.basename(file)
           method.call(file)
         end
@@ -247,6 +297,165 @@ RSpec.describe Raxon::RouteLoader do
         api_all_index = load_order.index { |f| f == "all.rb" }
         api_v1_all_index = load_order.rindex { |f| f == "all.rb" }
         expect(api_all_index).to be < api_v1_all_index if api_all_index && api_v1_all_index && api_all_index != api_v1_all_index
+      end
+    end
+  end
+
+  describe "isolated context" do
+    it "allows methods defined in route files to be called from handlers" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.response 200, type: :object do |r|
+              r.property :result, type: :string
+            end
+            endpoint.handler do |request, response|
+              response.code = :ok
+              response.body = {result: format_greeting("World")}
+            end
+
+            private
+
+            def format_greeting(name)
+              "Hello, \#{name}!"
+            end
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = dir }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        env = Rack::MockRequest.env_for("/")
+        status, _headers, body = Raxon::Router.new.call(env)
+
+        expect(status).to eq(200)
+        expect(JSON.parse(body.first)).to eq({"result" => "Hello, World!"})
+      end
+    end
+
+    it "isolates methods between different route files" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, "first"))
+        FileUtils.mkdir_p(File.join(dir, "second"))
+
+        # First route defines helper_one
+        File.write(File.join(dir, "first/get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.response 200, type: :object do |r|
+              r.property :result, type: :string
+            end
+            endpoint.handler do |request, response|
+              response.code = :ok
+              response.body = {result: helper_one}
+            end
+
+            def helper_one
+              "from first"
+            end
+          end
+        RUBY
+
+        # Second route defines helper_two (and should NOT have access to helper_one)
+        File.write(File.join(dir, "second/get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.response 200, type: :object do |r|
+              r.property :result, type: :string
+            end
+            endpoint.handler do |request, response|
+              response.code = :ok
+              response.body = {result: helper_two}
+            end
+
+            def helper_two
+              "from second"
+            end
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = dir }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        # Call first route
+        env1 = Rack::MockRequest.env_for("/first")
+        status1, _headers1, body1 = Raxon::Router.new.call(env1)
+        expect(status1).to eq(200)
+        expect(JSON.parse(body1.first)).to eq({"result" => "from first"})
+
+        # Call second route
+        env2 = Rack::MockRequest.env_for("/second")
+        status2, _headers2, body2 = Raxon::Router.new.call(env2)
+        expect(status2).to eq(200)
+        expect(JSON.parse(body2.first)).to eq({"result" => "from second"})
+      end
+    end
+
+    it "shares instance variables between before and handler blocks" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.response 200, type: :object do |r|
+              r.property :value, type: :string
+            end
+            endpoint.before do |request, response|
+              @shared_value = "set in before"
+            end
+            endpoint.handler do |request, response|
+              response.code = :ok
+              response.body = {value: @shared_value}
+            end
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = dir }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        env = Rack::MockRequest.env_for("/")
+        status, _headers, body = Raxon::Router.new.call(env)
+
+        expect(status).to eq(200)
+        expect(JSON.parse(body.first)).to eq({"value" => "set in before"})
+      end
+    end
+
+    it "allows before blocks to use private methods" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        File.write(File.join(dir, "get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.response 200, type: :object do |r|
+              r.property :authenticated, type: :boolean
+            end
+            endpoint.before do |request, response|
+              @user = authenticate(request)
+            end
+            endpoint.handler do |request, response|
+              response.code = :ok
+              response.body = {authenticated: !@user.nil?}
+            end
+
+            private
+
+            def authenticate(request)
+              {name: "Test User"}
+            end
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = dir }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        env = Rack::MockRequest.env_for("/")
+        status, _headers, body = Raxon::Router.new.call(env)
+
+        expect(status).to eq(200)
+        expect(JSON.parse(body.first)).to eq({"authenticated" => true})
       end
     end
   end
