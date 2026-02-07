@@ -240,6 +240,32 @@ RSpec.describe Raxon::RouteLoader do
       expect(Raxon::RouteLoader.routes).not_to be_nil
     end
 
+    it "loads route files from dot-prefixed directories" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        FileUtils.mkdir_p(File.join(dir, ".well-known"))
+
+        File.write(File.join(dir, ".well-known/get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.handler do |request, response|
+              response.code = :ok
+              response.body = {path: "/.well-known"}
+            end
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = dir }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        env = Rack::MockRequest.env_for("/.well-known")
+        status, _headers, body = Raxon::Router.new.call(env)
+
+        expect(status).to eq(200)
+        expect(JSON.parse(body.first)).to eq({"path" => "/.well-known"})
+      end
+    end
+
     it "loads all.rb files before method-specific files" do
       # Create a temporary test directory
       require "tmpdir"

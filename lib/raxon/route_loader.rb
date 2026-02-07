@@ -30,7 +30,7 @@ module Raxon
       #   routes.find(:GET, "/api/v1/users")
       def load!
         directory = Raxon.configuration.routes_directory
-        route_files = Dir.glob(File.join(directory, "**", "*.rb"))
+        route_files = Dir.glob(File.join(directory, "**", "*.rb"), File::FNM_DOTMATCH)
 
         # Sort files to ensure all.rb files are loaded first, ordered by depth
         sorted_files = route_files.sort_by do |file|
