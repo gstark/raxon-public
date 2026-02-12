@@ -70,7 +70,7 @@ module Raxon
         map_type_to_dry(field.type)
         generator = self
 
-        if field.type == "object" && field.properties.any?
+        if field.type == "object"
           add_object_field(schema_context, field_name, field, generator)
         elsif field.type == "array"
           add_array_field(schema_context, field_name, field)
