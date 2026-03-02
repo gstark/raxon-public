@@ -92,6 +92,8 @@ module Raxon
           add_object_field(schema_context, field_name, field, generator)
         elsif field.type == "array"
           add_array_field(schema_context, field_name, field)
+        elsif field.type == "file"
+          add_file_field(schema_context, field_name, field)
         elsif field.required
           add_required_scalar_field(schema_context, field_name, field.type)
         else
@@ -131,6 +133,21 @@ module Raxon
           schema_context.required(field_name).value(:array)
         else
           schema_context.optional(field_name).value(:array)
+        end
+      end
+
+      # Add a file field that accepts any value (Rack file hashes).
+      #
+      # @param schema_context [Dry::Schema::DSL] The schema DSL context
+      # @param field_name [Symbol] The field name
+      # @param field [Raxon::OpenApi::Parameter, Raxon::OpenApi::Property] The field definition
+      #
+      # @private
+      def add_file_field(schema_context, field_name, field)
+        if field.required
+          schema_context.required(field_name).filled
+        else
+          schema_context.optional(field_name)
         end
       end
 
@@ -198,6 +215,8 @@ module Raxon
           "params.hash"
         when "array"
           "params.array"
+        when "file"
+          "params.any"
         else
           # Default to string for unknown types
           "params.string"

@@ -615,6 +615,31 @@ endpoint.request_body type: :object, description: "User data", required: true do
 end
 ```
 
+### File Uploads
+
+Handle file uploads by declaring properties with `type: :file`. Raxon automatically wraps Rack multipart hashes into `Raxon::UploadedFile` objects:
+
+```ruby
+endpoint.request_body type: :multipart do |body|
+  body.property :photo, type: :file, required: true
+  body.property :caption, type: :string, required: false
+end
+
+endpoint.handler do |request, response, metadata|
+  photo = request.params[:photo]
+
+  # photo is a Raxon::UploadedFile — no conversion needed
+  photo.original_filename  # => "photo.jpg"
+  photo.content_type       # => "image/jpeg"
+  photo.tempfile.path      # => "/tmp/RackMultipart..."
+  photo.read               # => file contents
+end
+```
+
+`Raxon::UploadedFile` duck-types `ActionDispatch::Http::UploadedFile`, so downstream code (ActiveStorage, image processing libraries) works without changes.
+
+See [File Uploads Documentation](docs/file_uploads.md) for more details.
+
 ### Response Validation
 
 Define response schemas for automatic validation and documentation:

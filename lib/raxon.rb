@@ -40,6 +40,7 @@ require_relative "raxon/routes"
 require_relative "raxon/route_loader"
 require_relative "raxon/router"
 require_relative "raxon/server"
+require_relative "raxon/uploaded_file"
 require_relative "raxon/version"
 
 module Raxon

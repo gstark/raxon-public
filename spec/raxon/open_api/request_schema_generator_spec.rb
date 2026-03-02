@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "tempfile"
 
 RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
   describe "#to_dry_schema" do
@@ -373,6 +374,56 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
       end
     end
 
+    context "with file parameters" do
+      it "accepts file uploads for required file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        tempfile = Tempfile.new("upload")
+        file_hash = {tempfile: tempfile, filename: "photo.jpg", type: "image/jpeg"}
+
+        result = schema.call(photo: file_hash)
+        expect(result.success?).to be true
+        expect(result.to_h[:photo]).to eq(file_hash)
+
+        tempfile.close!
+      end
+
+      it "allows missing optional file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+        request_body.property :photo, type: :file, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "Test")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test"})
+      end
+
+      it "validates required file fields are present" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call({})
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:photo)
+      end
+    end
+
     context "with empty string parameters" do
       it "allows empty strings for required string parameters" do
         parameters = Raxon::OpenApi::Parameters.new
@@ -475,6 +526,13 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
       generator = described_class.new(parameters)
 
       expect(generator.map_type_to_dry("array")).to eq("params.array")
+    end
+
+    it "maps file type to any" do
+      parameters = Raxon::OpenApi::Parameters.new
+      generator = described_class.new(parameters)
+
+      expect(generator.map_type_to_dry("file")).to eq("params.any")
     end
 
     it "defaults unknown types to string" do
