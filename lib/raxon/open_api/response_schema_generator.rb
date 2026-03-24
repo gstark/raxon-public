@@ -31,6 +31,7 @@ module Raxon
       #   result.to_h      # => {status: "ok", id: 42}
       def to_dry_schema
         return nil if @response.properties.empty?
+        return nil if @response.type == "array"
 
         response = @response
         generator = self

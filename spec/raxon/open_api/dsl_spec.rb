@@ -316,6 +316,27 @@ RSpec.describe Raxon::OpenApi::DSL do
       })
     end
 
+    it "generates array response with inline item properties" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/users")
+
+        endpoint.response(:ok, type: :array) do |response|
+          response.property(:id, type: :number)
+          response.property(:name, type: :string)
+        end
+      end
+
+      spec = described_class.to_open_api
+      response_schema = spec["paths"]["/api/v1/users"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+      expect(response_schema["type"]).to eq("array")
+      expect(response_schema["items"]["type"]).to eq("object")
+      expect(response_schema["items"]["required"]).to eq(["id", "name"])
+      expect(response_schema["items"]["properties"]["id"]["type"]).to eq("number")
+      expect(response_schema["items"]["properties"]["name"]["type"]).to eq("string")
+    end
+
     it "prefers as: over of: when both are provided for object type" do
       described_class.component("Primary", type: :object) do |c|
         c.property(:name, type: :string)
@@ -381,6 +402,18 @@ RSpec.describe Raxon::OpenApi::DSL do
 
       expect(result.success?).to be false
       expect(result.errors.to_h).to have_key(:status)
+    end
+
+    it "returns nil schema for array responses with properties" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :array do |response|
+        response.property :id, type: :number, required: true
+        response.property :name, type: :string, required: true
+      end
+
+      schemas = endpoint.response_schemas
+
+      expect(schemas).to eq({})
     end
 
     it "returns empty hash when no responses have properties" do
@@ -499,6 +532,30 @@ RSpec.describe Raxon::OpenApi::DSL do
           "count" => 42
         }
       })
+    end
+
+    it "skips validation for array responses with properties" do
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.response 200, type: :array do |response|
+          response.property :id, type: :number, required: true
+          response.property :name, type: :string, required: true
+        end
+
+        endpoint.handler do |request, response|
+          response.code = :ok
+          response.body = [{id: 1, name: "Alice"}, {id: 2, name: "Bob"}]
+        end
+      end
+
+      env = Rack::MockRequest.env_for("/test")
+      status, _, body = Raxon::Router.new.call(env)
+
+      expect(status).to eq(200)
+      json_body = JSON.parse(body.first)
+      expect(json_body).to eq([
+        {"id" => 1, "name" => "Alice"},
+        {"id" => 2, "name" => "Bob"}
+      ])
     end
 
     it "fails validation when nested properties are missing" do

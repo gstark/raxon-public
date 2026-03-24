@@ -394,7 +394,11 @@ module Raxon
       #
       # @private
       def self.array_property_definition(property)
-        items = {**property_to_items_type(property), **merge_nullable(property)}
+        items = if property.properties&.any? && !property.of
+          {type: "object", **merge_nullable(property), **properties_to_json(property.properties)}
+        else
+          {**property_to_items_type(property), **merge_nullable(property)}
+        end
 
         if property.of.to_s == "object" && property.properties
           items.merge!(properties_to_json(property.properties))

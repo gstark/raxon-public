@@ -336,6 +336,26 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
       end
     end
 
+    context "with array response type" do
+      it "returns nil for array responses with properties" do
+        response = Raxon::OpenApi::Response.new(type: :array)
+        response.property :id, type: :number, required: true
+        response.property :name, type: :string, required: true
+
+        generator = described_class.new(response)
+
+        expect(generator.to_dry_schema).to be_nil
+      end
+
+      it "returns nil for array responses without properties" do
+        response = Raxon::OpenApi::Response.new(type: :array)
+
+        generator = described_class.new(response)
+
+        expect(generator.to_dry_schema).to be_nil
+      end
+    end
+
     context "with optional array properties" do
       it "allows missing optional array" do
         response = Raxon::OpenApi::Response.new(type: :object)
