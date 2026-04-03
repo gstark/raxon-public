@@ -95,9 +95,9 @@ module Raxon
         elsif field.type == "file"
           add_file_field(schema_context, field_name, field)
         elsif field.required
-          add_required_scalar_field(schema_context, field_name, field.type)
+          add_required_scalar_field(schema_context, field_name, field.type, nullable: field.nullable)
         else
-          add_optional_scalar_field(schema_context, field_name, field.type)
+          add_optional_scalar_field(schema_context, field_name, field.type, nullable: field.nullable)
         end
       end
 
@@ -130,9 +130,17 @@ module Raxon
       # @private
       def add_array_field(schema_context, field_name, field)
         if field.required
-          schema_context.required(field_name).value(:array)
+          if field.nullable
+            schema_context.required(field_name).maybe(:array)
+          else
+            schema_context.required(field_name).value(:array)
+          end
         else
-          schema_context.optional(field_name).value(:array)
+          if field.nullable
+            schema_context.optional(field_name).maybe(:array)
+          else
+            schema_context.optional(field_name).value(:array)
+          end
         end
       end
 
@@ -158,16 +166,32 @@ module Raxon
       # @param field_type [String] The field type
       #
       # @private
-      def add_required_scalar_field(schema_context, field_name, field_type)
+      def add_required_scalar_field(schema_context, field_name, field_type, nullable: false)
         case field_type
         when "string"
-          schema_context.required(field_name).value(:string)
+          if nullable
+            schema_context.required(field_name).maybe(:string)
+          else
+            schema_context.required(field_name).value(:string)
+          end
         when "number"
-          schema_context.required(field_name).filled(:integer)
+          if nullable
+            schema_context.required(field_name).maybe(:integer)
+          else
+            schema_context.required(field_name).filled(:integer)
+          end
         when "boolean"
-          schema_context.required(field_name).filled(:bool)
+          if nullable
+            schema_context.required(field_name).maybe(:bool)
+          else
+            schema_context.required(field_name).filled(:bool)
+          end
         else
-          schema_context.required(field_name).filled
+          if nullable
+            schema_context.required(field_name).maybe(:string)
+          else
+            schema_context.required(field_name).filled
+          end
         end
       end
 
@@ -178,17 +202,24 @@ module Raxon
       # @param field_type [String] The field type
       #
       # @private
-      def add_optional_scalar_field(schema_context, field_name, field_type)
+      def add_optional_scalar_field(schema_context, field_name, field_type, nullable: false)
         case field_type
         when "string"
-          schema_context.optional(field_name).value(:string)
+          if nullable
+            schema_context.optional(field_name).maybe(:string)
+          else
+            schema_context.optional(field_name).value(:string)
+          end
         when "number"
           schema_context.optional(field_name).maybe(:integer)
         when "boolean"
           schema_context.optional(field_name).maybe(:bool)
         else
-          # Default to string for unknown types
-          schema_context.optional(field_name).value(:string)
+          if nullable
+            schema_context.optional(field_name).maybe(:string)
+          else
+            schema_context.optional(field_name).value(:string)
+          end
         end
       end
 

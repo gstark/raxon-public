@@ -424,6 +424,87 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
       end
     end
 
+    context "with nullable properties" do
+      it "allows nil for nullable optional string properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: nil)
+        expect(result.success?).to be true
+      end
+
+      it "rejects nil for non-nullable optional string properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: nil)
+        expect(result.success?).to be false
+      end
+
+      it "allows nil for nullable required string properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: true, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable required number properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :score, type: :number, required: true, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(score: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable array properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :tags, type: :array, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(tags: nil)
+        expect(result.success?).to be true
+      end
+
+      it "still accepts valid values for nullable properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: "some text")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({situation_description: "some text"})
+      end
+    end
+
     context "with empty string parameters" do
       it "allows empty strings for required string parameters" do
         parameters = Raxon::OpenApi::Parameters.new
