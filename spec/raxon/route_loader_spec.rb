@@ -266,6 +266,58 @@ RSpec.describe Raxon::RouteLoader do
       end
     end
 
+    it "loads route files from multiple routes directories as a union" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        app_routes = File.join(dir, "app_routes")
+        engine_routes = File.join(dir, "engine_routes")
+        FileUtils.mkdir_p(File.join(app_routes, "api"))
+        FileUtils.mkdir_p(File.join(engine_routes, "engine"))
+
+        File.write(File.join(app_routes, "api/get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.handler { |request, response| response.body = {source: "app"} }
+          end
+        RUBY
+
+        File.write(File.join(engine_routes, "engine/get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.handler { |request, response| response.body = {source: "engine"} }
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = [app_routes, engine_routes] }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        expect(Raxon::RouteLoader.routes.find("GET", "/api")).not_to be_nil
+        expect(Raxon::RouteLoader.routes.find("GET", "/engine")).not_to be_nil
+      end
+    end
+
+    it "raises a helpful error when multiple routes directories contain the same endpoint" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        app_routes = File.join(dir, "app_routes")
+        engine_routes = File.join(dir, "engine_routes")
+        FileUtils.mkdir_p(File.join(app_routes, "api"))
+        FileUtils.mkdir_p(File.join(engine_routes, "api"))
+
+        [app_routes, engine_routes].each do |routes_dir|
+          File.write(File.join(routes_dir, "api/get.rb"), <<~RUBY)
+            Raxon::RouteLoader.register(__FILE__) do |endpoint|
+              endpoint.handler { |request, response| response.body = {} }
+            end
+          RUBY
+        end
+
+        Raxon.configure { |config| config.routes_directory = [app_routes, engine_routes] }
+        Raxon::RouteLoader.reset!
+
+        expect { Raxon::RouteLoader.load! }.to raise_error(Raxon::Error, /Route collision for GET \/api/)
+      end
+    end
+
     it "loads all.rb files before method-specific files" do
       # Create a temporary test directory
       require "tmpdir"

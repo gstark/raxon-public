@@ -75,11 +75,15 @@ module Raxon
     def relative_file_path(absolute_path)
       return "" if absolute_path.nil?
 
-      routes_directory = Raxon.configuration.routes_directory
-      expanded_routes_dir = File.expand_path(routes_directory)
       expanded_file_path = File.expand_path(absolute_path)
+      routes_directory = Array(Raxon.configuration.routes_directory).compact.find do |directory|
+        expanded_routes_dir = File.expand_path(directory)
+        expanded_file_path.start_with?(expanded_routes_dir + File::SEPARATOR)
+      end
 
-      # Get relative path from routes directory
+      return absolute_path unless routes_directory
+
+      expanded_routes_dir = File.expand_path(routes_directory)
       relative_path = expanded_file_path.sub(/^#{Regexp.escape(expanded_routes_dir)}\//, "")
       "./#{relative_path}"
     end

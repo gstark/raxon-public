@@ -9,6 +9,16 @@ RSpec.describe Raxon::Configuration do
       expect(config.routes_directory).to eq("routes")
     end
 
+    it "allows routes_directories as an alias for routes_directory" do
+      config = Raxon::Configuration.new
+      directories = ["routes", "engines/blog/routes"]
+
+      config.routes_directories = directories
+
+      expect(config.routes_directory).to eq(directories)
+      expect(config.routes_directories).to eq(directories)
+    end
+
     it "sets default openapi_title" do
       config = Raxon::Configuration.new
       expect(config.openapi_title).to eq("API")

@@ -32,6 +32,18 @@ module Raxon
     # @return [void]
     def register(method, path, endpoint)
       key = route_key(method, path)
+      if @routes.key?(key)
+        existing_endpoint = @routes[key][:endpoint]
+        existing_is_all = existing_endpoint.route_file_path&.end_with?("all.rb")
+        new_is_all = endpoint.route_file_path&.end_with?("all.rb")
+
+        unless existing_is_all != new_is_all
+          raise Raxon::Error, "Route collision for #{method.upcase} #{path}: " \
+                              "#{endpoint.route_file_path || "unknown file"} conflicts with " \
+                              "#{existing_endpoint.route_file_path || "unknown file"}"
+        end
+      end
+
       @routes[key] = {
         endpoint: endpoint,
         mustermann: Mustermann.new(path)

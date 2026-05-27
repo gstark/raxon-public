@@ -729,7 +729,7 @@ end
 **Configuration options:**
 
 - `root` - Root directory of the application as a Pathname (required, raises error if not set when accessed via `Raxon.root`)
-- `routes_directory` - Directory containing route files (default: `"routes"`)
+- `routes_directory` / `routes_directories` - Directory or array of directories containing route files (default: `"routes"`). Multiple directories are unioned together, and duplicate method/path endpoints raise `Raxon::Error`.
 - `helpers_path` - Directory for handler helper modules (default: `nil`)
 - `on_error` - Callback proc for error handling (receives error and Rack env)
 - `openapi_title` - Title for OpenAPI documentation

@@ -29,8 +29,10 @@ module Raxon
       #   routes = Raxon::RouteLoader.load!
       #   routes.find(:GET, "/api/v1/users")
       def load!
-        directory = Raxon.configuration.routes_directory
-        route_files = Dir.glob(File.join(directory, "**", "*.rb"), File::FNM_DOTMATCH)
+        directories = routes_directories
+        route_files = directories.flat_map do |directory|
+          Dir.glob(File.join(directory, "**", "*.rb"), File::FNM_DOTMATCH)
+        end
 
         # Sort files to ensure all.rb files are loaded first, ordered by depth
         sorted_files = route_files.sort_by do |file|
@@ -115,7 +117,7 @@ module Raxon
 
         registered_files.add(expanded_path)
 
-        directory = Raxon.configuration.routes_directory
+        directory = routes_directory_for(file_path)
         extract_route_info(file_path, directory) => {path:, method:, param_names:}
 
         # Capture the route context (anonymous class) for isolated method scoping
@@ -182,6 +184,36 @@ module Raxon
       end
 
       private
+
+      # Return the configured routes directories as an array.
+      #
+      # Supports the historical single String value and the new multi-directory
+      # Array value. Nil entries are ignored so applications can conditionally
+      # append engine paths.
+      #
+      # @return [Array<String>]
+      def routes_directories
+        Array(Raxon.configuration.routes_directory).compact
+      end
+
+      # Find the configured routes directory that contains the given file.
+      #
+      # When multiple directories are configured, a route file's path should be
+      # made relative to the directory it was loaded from. This lets application
+      # and engine route trees be unioned without including their filesystem
+      # prefixes in the URL path.
+      #
+      # @param file_path [String]
+      # @return [String]
+      # @raise [Raxon::Error] If no configured routes directory contains file_path
+      def routes_directory_for(file_path)
+        expanded_file_path = File.expand_path(file_path)
+
+        routes_directories.find do |directory|
+          expanded_directory = File.expand_path(directory)
+          expanded_file_path == expanded_directory || expanded_file_path.start_with?(expanded_directory + File::SEPARATOR)
+        end || raise(Raxon::Error, "Route file #{file_path} is not inside configured routes_directory: #{routes_directories.join(", ")}")
+      end
 
       # Configure basic endpoint properties from route info.
       #
