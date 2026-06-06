@@ -174,6 +174,56 @@ RSpec.describe Raxon::Request, "request_body validation" do
       tempfile.close!
     end
 
+    it "wraps file params inside array object items" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :multipart, required: true do |body|
+        body.property :attachments, type: :array, of: :object do |attachment|
+          attachment.property :file, type: :file, required: true
+          attachment.property :caption, type: :string, required: false
+        end
+      end
+
+      tempfile = Tempfile.new("upload")
+      file_hash = {tempfile: tempfile, filename: "document.pdf", type: "application/pdf"}
+
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        "CONTENT_TYPE" => "multipart/form-data"
+      )
+      rack_request = Rack::Request.new(rack_env)
+      allow(rack_request).to receive(:params).and_return({"attachments" => [{"file" => file_hash, "caption" => "Document"}]})
+      request = Raxon::Request.new(rack_request, endpoint)
+
+      params = request.params
+      expect(params[:attachments][0][:file]).to be_a(Raxon::UploadedFile)
+      expect(params[:attachments][0][:file].original_filename).to eq("document.pdf")
+      expect(params[:attachments][0][:caption]).to eq("Document")
+      expect(request.validation_errors).to be_nil
+
+      tempfile.close!
+    end
+
+    it "reports validation errors for invalid file params" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :multipart, required: true do |body|
+        body.property :photo, type: :file, required: true
+      end
+
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        "CONTENT_TYPE" => "multipart/form-data"
+      )
+      rack_request = Rack::Request.new(rack_env)
+      allow(rack_request).to receive(:params).and_return({"photo" => "not a file"})
+      request = Raxon::Request.new(rack_request, endpoint)
+
+      params = request.params
+      expect(params[:photo]).to eq("not a file")
+      expect(request.validation_errors).to have_key(:photo)
+    end
+
     it "does not wrap non-Hash file params" do
       endpoint = Raxon::OpenApi::Endpoint.new
       endpoint.request_body type: :object, required: true do |body|
@@ -195,6 +245,35 @@ RSpec.describe Raxon::Request, "request_body validation" do
       params = request.params
       expect(params[:photo]).to be_a(Raxon::UploadedFile)
       expect(params[:photo]).to eq(already_wrapped)
+
+      tempfile.close!
+    end
+
+    it "wraps nested Hash file params in Raxon::UploadedFile" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :profile, type: :object, required: true do |profile|
+          profile.property :photo, type: :file, required: true
+        end
+      end
+
+      tempfile = Tempfile.new("upload")
+      file_hash = {tempfile: tempfile, filename: "photo.jpg", type: "image/jpeg"}
+
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        "CONTENT_TYPE" => "multipart/form-data"
+      )
+      rack_request = Rack::Request.new(rack_env)
+      allow(rack_request).to receive(:params).and_return({"profile" => {"photo" => file_hash}})
+      request = Raxon::Request.new(rack_request, endpoint)
+
+      params = request.params
+      expect(params[:profile][:photo]).to be_a(Raxon::UploadedFile)
+      expect(params[:profile][:photo].original_filename).to eq("photo.jpg")
+      expect(params[:profile][:photo].content_type).to eq("image/jpeg")
+      expect(params[:profile][:photo].tempfile).to eq(tempfile)
 
       tempfile.close!
     end

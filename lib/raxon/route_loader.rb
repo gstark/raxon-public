@@ -29,7 +29,7 @@ module Raxon
       #   routes = Raxon::RouteLoader.load!
       #   routes.find(:GET, "/api/v1/users")
       def load!
-        directories = routes_directories
+        directories = expanded_routes_directories
         route_files = directories.flat_map do |directory|
           Dir.glob(File.join(directory, "**", "*.rb"), File::FNM_DOTMATCH)
         end
@@ -124,30 +124,20 @@ module Raxon
         # This may be nil for programmatic registration (backwards compatibility)
         route_context = Thread.current[:raxon_route_context]
 
-        # Determine which HTTP methods to register for
-        methods_to_register = if method == "all"
-          ACTUAL_HTTP_METHODS
-        else
-          [method]
-        end
+        OpenApi::DSL.endpoint do |endpoint|
+          configure_endpoint(endpoint, file_path, path, method)
 
-        # Register endpoint for each method
-        methods_to_register.each do |http_method|
-          OpenApi::DSL.endpoint do |endpoint|
-            configure_endpoint(endpoint, file_path, path, http_method)
+          # Pre-compile ERB template if it exists
+          compile_erb_template(endpoint, file_path)
 
-            # Pre-compile ERB template if it exists
-            compile_erb_template(endpoint, file_path)
+          # Pass the route context to the endpoint for isolated execution
+          endpoint.route_context = route_context
 
-            # Pass the route context to the endpoint for isolated execution
-            endpoint.route_context = route_context
+          # Execute the block to configure the endpoint
+          block.call(endpoint)
 
-            # Execute the block to configure the endpoint
-            block.call(endpoint)
-
-            # Store the endpoint with the Routes collection
-            routes.register(http_method.upcase, path, endpoint)
-          end
+          # Store the endpoint with the Routes collection
+          routes.register(method.upcase, path, endpoint)
         end
       end
 
@@ -196,6 +186,13 @@ module Raxon
         Array(Raxon.configuration.routes_directory).compact
       end
 
+      # Return configured route directories as expanded absolute paths.
+      #
+      # @return [Array<String>]
+      def expanded_routes_directories
+        routes_directories.map { |directory| File.expand_path(directory) }.uniq
+      end
+
       # Find the configured routes directory that contains the given file.
       #
       # When multiple directories are configured, a route file's path should be
@@ -209,10 +206,9 @@ module Raxon
       def routes_directory_for(file_path)
         expanded_file_path = File.expand_path(file_path)
 
-        routes_directories.find do |directory|
-          expanded_directory = File.expand_path(directory)
-          expanded_file_path == expanded_directory || expanded_file_path.start_with?(expanded_directory + File::SEPARATOR)
-        end || raise(Raxon::Error, "Route file #{file_path} is not inside configured routes_directory: #{routes_directories.join(", ")}")
+        expanded_routes_directories
+          .select { |directory| expanded_file_path == directory || expanded_file_path.start_with?(directory + File::SEPARATOR) }
+          .max_by(&:length) || raise(Raxon::Error, "Route file #{file_path} is not inside configured routes_directory: #{routes_directories.join(", ")}")
       end
 
       # Configure basic endpoint properties from route info.
@@ -231,7 +227,7 @@ module Raxon
       def configure_endpoint(endpoint, file_path, path, method)
         endpoint.path(path)
         endpoint.method = method
-        endpoint.operation(method.to_sym)
+        endpoint.operation(method == "all" ? ACTUAL_HTTP_METHODS.map(&:to_sym) : method.to_sym)
         endpoint.route_file_path = file_path
       end
 

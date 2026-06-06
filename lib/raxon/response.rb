@@ -85,6 +85,9 @@ module Raxon
       network_authentication_required: 511
     }.freeze
 
+    HALT_BODY_UNSET = Object.new.freeze
+    private_constant :HALT_BODY_UNSET
+
     # Initialize a new Response with an underlying Rack::Response.
     #
     # @param endpoint [Raxon::OpenApi::Endpoint, nil] Optional endpoint for accessing route metadata
@@ -197,15 +200,18 @@ module Raxon
     #
     # @raise [Raxon::HaltException] Always raises to stop processing
     #
+    # @param code [Symbol, Integer, nil] Optional status code to set before halting
+    # @param body [Hash, Array, String, Object, nil] Optional body to set before halting
+    #
     # @example
     #   endpoint.before do |request, response|
     #     unless request.headers["Authorization"]
-    #       response.code = :unauthorized
-    #       response.body = { error: "Unauthorized" }
-    #       response.halt
+    #       response.halt code: :unauthorized, body: { error: "Unauthorized" }
     #     end
     #   end
-    def halt
+    def halt(code: nil, body: HALT_BODY_UNSET)
+      self.code = code unless code.nil?
+      self.body = body unless body.equal?(HALT_BODY_UNSET)
       @halted = true
       raise Raxon::HaltException.new(self)
     end

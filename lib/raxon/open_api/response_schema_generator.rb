@@ -5,7 +5,7 @@ module Raxon
     # Generates Dry::Schema validators from OpenAPI response definitions.
     #
     # This class converts OpenAPI response specifications into executable
-    # Dry::Schema validators for runtime validation of response bodies.
+    # validators for runtime validation of response bodies.
     #
     # @example Generate schema from endpoint response
     #   generator = ResponseSchemaGenerator.new(endpoint.responses[200])
@@ -13,16 +13,86 @@ module Raxon
     #   result = schema.call(response_body)
     #
     class ResponseSchemaGenerator
+      # Small adapter for array-root response validation.
+      #
+      # Dry::Schema validates object-shaped hashes, so root arrays are validated
+      # as a synthetic property and then unwrapped back into the public response
+      # validation shape. Item validation remains owned by PropertySchemaBuilder.
+      class ArrayRootValidator
+        ROOT_KEY = :_root
+
+        def initialize(schema)
+          @schema = schema
+        end
+
+        def call(value)
+          result = @schema.call(ROOT_KEY => value)
+          ValidationResult.new(value, root_errors(result), root_value(result))
+        end
+
+        private
+
+        def root_errors(result)
+          errors = result.errors.to_h.fetch(ROOT_KEY, {})
+          return {_self: errors} if errors.is_a?(Array)
+
+          errors
+        end
+
+        def root_value(result)
+          result.to_h.fetch(ROOT_KEY)
+        end
+      end
+
+      # Minimal result object for array-root response validation.
+      #
+      # Object-root responses return Dry::Schema::Result directly. Arrays need an
+      # adapter result that exposes the same methods used by Endpoint.
+      class ValidationResult
+        def self.failure(value, errors)
+          new(value, errors, value)
+        end
+
+        def initialize(value, errors, coerced_value)
+          @value = value
+          @errors = errors
+          @coerced_value = coerced_value
+        end
+
+        def success?
+          @errors.empty?
+        end
+
+        def errors
+          ValidationErrors.new(@errors)
+        end
+
+        def to_h
+          success? ? @coerced_value : @value
+        end
+      end
+
+      class ValidationErrors
+        def initialize(errors)
+          @errors = errors
+        end
+
+        def to_h
+          @errors
+        end
+      end
+
       # Initialize the generator with a response definition.
       #
       # @param response [Raxon::OpenApi::Response] The response to convert
       def initialize(response)
         @response = response
+        @property_schema_builder = PropertySchemaBuilder.new
       end
 
-      # Generate a Dry::Schema from the response definition.
+      # Generate a validator from the response definition.
       #
-      # @return [Dry::Schema::Params, nil] The generated schema, or nil if no properties
+      # @return [#call, nil] The generated validator, or nil if no properties
       #
       # @example
       #   schema = generator.to_dry_schema
@@ -31,160 +101,45 @@ module Raxon
       #   result.to_h      # => {status: "ok", id: 42}
       def to_dry_schema
         return nil if @response.properties.empty?
-        return nil if @response.type == "array"
 
-        response = @response
-        generator = self
+        return ArrayRootValidator.new(array_schema_for(@response.properties)) if @response.type == "array"
+
+        object_schema_for(@response.properties)
+      end
+
+      # Build a Dry::Schema for an object with the given properties.
+      #
+      # @param properties [Hash<Symbol, Raxon::OpenApi::Property>] The object properties
+      # @return [Dry::Schema::Params]
+      def object_schema_for(properties)
+        builder = @property_schema_builder
 
         Dry::Schema.Params do
-          generator.add_properties_to_schema(self, response.properties)
+          builder.add_properties_to_schema(self, properties)
         end
       end
 
-      # Add nested properties to a hash schema context.
+      # Build a Dry::Schema for a synthetic array root property.
       #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param properties [Hash<Symbol, Raxon::OpenApi::Property>] The properties to add
-      def add_properties_to_schema(schema_context, properties)
-        properties.each do |prop_name, property|
-          add_property_to_schema(schema_context, prop_name, property)
+      # @param properties [Hash<Symbol, Raxon::OpenApi::Property>] The array item properties
+      # @return [Dry::Schema::Params]
+      def array_schema_for(properties)
+        builder = @property_schema_builder
+        root_property = Property.new(
+          type: :array,
+          of: :object,
+          required: true,
+          nullable: @response.nullable,
+          properties: properties
+        )
+
+        Dry::Schema.Params do
+          builder.add_property_to_schema(self, ArrayRootValidator::ROOT_KEY, root_property)
         end
       end
 
-      # Add a single property to the Dry::Schema DSL context.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param prop_name [Symbol] The property name
-      # @param property [Raxon::OpenApi::Property] The property definition
-      def add_property_to_schema(schema_context, prop_name, property)
-        add_field_to_schema(schema_context, prop_name, property)
-      end
-
-      # Add a field to the Dry::Schema DSL context.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Property] The field definition
-      #
-      # @private
-      def add_field_to_schema(schema_context, field_name, field)
-        map_type_to_dry(field.type)
-        generator = self
-
-        if field.type == "object"
-          add_object_field(schema_context, field_name, field, generator)
-        elsif field.type == "array"
-          add_array_field(schema_context, field_name, field)
-        elsif field.required
-          add_required_scalar_field(schema_context, field_name, field.type)
-        else
-          add_optional_scalar_field(schema_context, field_name, field.type)
-        end
-      end
-
-      # Add an object field with nested properties.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Property] The field definition
-      # @param generator [ResponseSchemaGenerator] The generator instance
-      #
-      # @private
-      def add_object_field(schema_context, field_name, field, generator)
-        if field.required
-          schema_context.required(field_name).hash do
-            generator.add_properties_to_schema(self, field.properties)
-          end
-        else
-          schema_context.optional(field_name).hash do
-            generator.add_properties_to_schema(self, field.properties)
-          end
-        end
-      end
-
-      # Add an array field.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Property] The field definition
-      #
-      # @private
-      def add_array_field(schema_context, field_name, field)
-        if field.required
-          schema_context.required(field_name).value(:array)
-        else
-          schema_context.optional(field_name).value(:array)
-        end
-      end
-
-      # Add a required scalar field with type coercion.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field_type [String] The field type
-      #
-      # @private
-      def add_required_scalar_field(schema_context, field_name, field_type)
-        case field_type
-        when "string"
-          schema_context.required(field_name).value(:string)
-        when "number"
-          schema_context.required(field_name).filled(:integer)
-        when "boolean"
-          schema_context.required(field_name).filled(:bool)
-        else
-          schema_context.required(field_name).filled
-        end
-      end
-
-      # Add an optional scalar field with type coercion.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field_type [String] The field type
-      #
-      # @private
-      def add_optional_scalar_field(schema_context, field_name, field_type)
-        case field_type
-        when "string"
-          schema_context.optional(field_name).value(:string)
-        when "number"
-          schema_context.optional(field_name).maybe(:integer)
-        when "boolean"
-          schema_context.optional(field_name).maybe(:bool)
-        else
-          # Default to string for unknown types
-          schema_context.optional(field_name).value(:string)
-        end
-      end
-
-      # Map OpenAPI types to Dry::Types specifications.
-      #
-      # @param openapi_type [String] The OpenAPI type
-      # @return [String] The corresponding Dry::Types specification
-      #
-      # @example
-      #   map_type_to_dry("string")   # => "params.string"
-      #   map_type_to_dry("number")   # => "params.integer"
-      #   map_type_to_dry("boolean")  # => "params.bool"
       def map_type_to_dry(openapi_type)
-        case openapi_type
-        when "string"
-          "params.string"
-        when "number"
-          # Use integer for number type
-          # Dry::Schema::Params will coerce "42" to 42
-          "params.integer"
-        when "boolean"
-          "params.bool"
-        when "object"
-          "params.hash"
-        when "array"
-          "params.array"
-        else
-          # Default to string for unknown types
-          "params.string"
-        end
+        @property_schema_builder.map_type_to_dry(openapi_type)
       end
     end
   end

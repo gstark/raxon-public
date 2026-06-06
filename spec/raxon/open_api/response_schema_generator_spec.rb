@@ -257,6 +257,21 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
         expect(result.success?).to be true
         expect(result.to_h).to eq({tags: ["ruby", "rails"]})
       end
+
+      it "validates response array item object properties" do
+        response = Raxon::OpenApi::Response.new(type: :object)
+        response.property :users, type: :array, of: :object, required: true do |user|
+          user.property :id, type: :number, required: true
+        end
+
+        generator = described_class.new(response)
+        schema = generator.to_dry_schema
+
+        result = schema.call(users: [{}])
+
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:users)
+      end
     end
 
     context "with multiple properties of different types" do
@@ -337,14 +352,46 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
     end
 
     context "with array response type" do
-      it "returns nil for array responses with properties" do
+      it "validates each array item against inline response properties" do
         response = Raxon::OpenApi::Response.new(type: :array)
         response.property :id, type: :number, required: true
         response.property :name, type: :string, required: true
 
         generator = described_class.new(response)
+        schema = generator.to_dry_schema
 
-        expect(generator.to_dry_schema).to be_nil
+        result = schema.call([{id: "1", name: "Alice"}, {id: "2", name: "Bob"}])
+
+        expect(result.success?).to be true
+        expect(result.to_h).to eq([{id: 1.0, name: "Alice"}, {id: 2.0, name: "Bob"}])
+      end
+
+      it "reports array item validation errors by index" do
+        response = Raxon::OpenApi::Response.new(type: :array)
+        response.property :id, type: :number, required: true
+        response.property :name, type: :string, required: true
+
+        generator = described_class.new(response)
+        schema = generator.to_dry_schema
+
+        result = schema.call([{id: "1", name: "Alice"}, {id: "2"}])
+
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(1)
+        expect(result.errors.to_h[1]).to have_key(:name)
+      end
+
+      it "rejects non-array response bodies" do
+        response = Raxon::OpenApi::Response.new(type: :array)
+        response.property :id, type: :number, required: true
+
+        generator = described_class.new(response)
+        schema = generator.to_dry_schema
+
+        result = schema.call({id: "1"})
+
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to eq({_self: ["must be an array"]})
       end
 
       it "returns nil for array responses without properties" do

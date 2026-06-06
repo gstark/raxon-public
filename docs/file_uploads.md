@@ -115,7 +115,7 @@ end
 
 1. Rack parses the multipart request and produces a raw Hash (`{ tempfile: ..., filename: ..., type: ... }`)
 2. The `RequestSchemaGenerator` validates that required file fields are present (without type coercion)
-3. After validation, `Request#coerce_file_params` wraps any Hash-valued file params in `Raxon::UploadedFile`
+3. After validation, `RequestBodyCoercer` wraps declared file params in `Raxon::UploadedFile`, including nested file fields inside objects and arrays of objects
 4. The handler receives `Raxon::UploadedFile` objects ready to use
 
-Values that are already `Raxon::UploadedFile` instances (not Hashes) are left untouched.
+Values that are already `Raxon::UploadedFile` instances are left untouched. Values declared as `type: :file` must be Rack multipart file hashes or `Raxon::UploadedFile` instances; invalid values fail request validation.

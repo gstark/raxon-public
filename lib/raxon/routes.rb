@@ -8,46 +8,39 @@ module Raxon
 
     # Initialize a new Routes collection.
     def initialize
-      @routes = {}
+      @entries_by_path = {}
     end
 
     def each(&block)
-      @routes.each(&block)
+      return all.each unless block
+
+      all.each(&block)
     end
 
     def size
-      @routes.size
+      all.size
     end
 
     def empty?
-      @routes.empty?
+      @entries_by_path.empty?
     end
 
     # Register a route with its endpoint data.
     #
-    # @param method [String] HTTP method in uppercase
+    # @param method [String] HTTP method in uppercase, or ALL for an all.rb endpoint
     # @param path [String] URL path (e.g., "/api/v1/users/{id}")
     # @param endpoint [Endpoint] The endpoint to register
     #
     # @return [void]
     def register(method, path, endpoint)
-      key = route_key(method, path)
-      if @routes.key?(key)
-        existing_endpoint = @routes[key][:endpoint]
-        existing_is_all = existing_endpoint.route_file_path&.end_with?("all.rb")
-        new_is_all = endpoint.route_file_path&.end_with?("all.rb")
+      method = method.upcase
+      entry = route_entry(path)
 
-        unless existing_is_all != new_is_all
-          raise Raxon::Error, "Route collision for #{method.upcase} #{path}: " \
-                              "#{endpoint.route_file_path || "unknown file"} conflicts with " \
-                              "#{existing_endpoint.route_file_path || "unknown file"}"
-        end
+      if method == "ALL"
+        register_all_route(path, endpoint, entry)
+      else
+        register_method_route(method, path, endpoint, entry)
       end
-
-      @routes[key] = {
-        endpoint: endpoint,
-        mustermann: Mustermann.new(path)
-      }
     end
 
     # Find a route by method and path.
@@ -63,83 +56,128 @@ module Raxon
     # @param path [String] Request path
     # @return [Hash, nil] Route data with endpoints array and params, or nil if not found
     def find(method, path)
-      # Try exact match first (for routes without parameters)
-      exact_key = route_key(method, path)
-      if @routes[exact_key]
-        return route_data_with_hierarchy(@routes[exact_key], method, path)
+      method = method.upcase
+
+      if (route_data = exact_route_data(method, path))
+        return route_data_with_hierarchy(route_data, method)
       end
 
-      # Then try pattern matching for dynamic routes
       find_pattern_match(method, path)
     end
 
-    # Get all registered routes.
+    # Get all registered routes in the legacy keyed shape.
     #
-    # @return [Hash] The internal routes hash
+    # @return [Hash] Routes keyed by method/path
     def all
-      @routes
+      @entries_by_path.each_with_object({}) do |(path, entry), routes|
+        routes[route_key("ALL", path)] = route_data(entry, entry[:all]) if entry[:all]
+        entry[:methods].each do |method, endpoint|
+          routes[route_key(method, path)] = route_data(entry, endpoint)
+        end
+      end
     end
 
     # Reset all routes.
     #
     # @return [void]
     def reset
-      @routes.clear
+      @entries_by_path.clear
     end
 
     private
 
+    def route_entry(path)
+      @entries_by_path[path] ||= {
+        path: path,
+        mustermann: Mustermann.new(path),
+        all: nil,
+        methods: {}
+      }
+    end
+
+    def route_data(entry, endpoint)
+      {
+        endpoint: endpoint,
+        mustermann: entry[:mustermann],
+        entry: entry,
+        path: entry[:path]
+      }
+    end
+
+    def register_all_route(path, endpoint, entry)
+      raise_collision("ALL", path, endpoint, entry[:all]) if entry[:all]
+
+      entry[:all] = endpoint
+    end
+
+    def register_method_route(method, path, endpoint, entry)
+      raise_collision(method, path, endpoint, entry[:methods][method]) if entry[:methods].key?(method)
+
+      entry[:methods][method] = endpoint
+    end
+
+    def raise_collision(method, path, endpoint, existing_endpoint)
+      raise Raxon::Error, "Route collision for #{method.upcase} #{path}: " \
+                          "#{endpoint.route_file_path || "unknown file"} conflicts with " \
+                          "#{existing_endpoint.route_file_path || "unknown file"}"
+    end
+
+    def exact_route_data(method, path)
+      entry = @entries_by_path[path]
+      return unless entry
+
+      endpoint = entry[:methods][method] || entry[:all]
+      route_data(entry, endpoint) if endpoint
+    end
+
     # Build route data with the endpoint hierarchy for the given path.
     #
-    # Collects all matching parent paths (those that are prefixes of the request path)
-    # and returns them sorted by depth, allowing before blocks to execute in order.
-    # At each level, checks for "all.rb" endpoints first, then method-specific endpoints.
+    # Collects all matching parent route entries and returns them sorted by depth,
+    # allowing before blocks to execute in order. At each level, checks for all.rb
+    # endpoints first, then method-specific endpoints.
     #
     # @param final_route_data [Hash] The route data for the most specific path
     # @param method [String] HTTP method
-    # @param path [String] Request path
     # @return [Hash] Route data with endpoints array
-    def route_data_with_hierarchy(final_route_data, method, path)
+    def route_data_with_hierarchy(final_route_data, method)
       endpoints = []
-      path_parts = path.split("/").reject(&:empty?)
 
-      # Collect all matching parent paths
-      # At each level, check for all.rb routes first to ensure they execute before method-specific routes
-      (1..path_parts.length).each do |i|
-        parent_path = "/" + path_parts[0...i].join("/")
-
-        # Check each actual HTTP method to find all.rb routes at this level
-        # We need to check all methods because all.rb registers under each method
-        RouteLoader::ACTUAL_HTTP_METHODS.each do |all_method|
-          all_key = route_key(all_method.upcase, parent_path)
-          if @routes[all_key] && @routes[all_key][:endpoint].route_file_path&.end_with?("all.rb")
-            # Only add if not already added (all.rb endpoints are registered for each method)
-            unless endpoints.include?(@routes[all_key][:endpoint])
-              endpoints << @routes[all_key][:endpoint]
-            end
-            break # Found the all.rb for this level, no need to check other methods
-          end
-        end
-
-        # Then check for method-specific route at this level
-        parent_key = route_key(method, parent_path)
-        if @routes[parent_key] && !@routes[parent_key][:endpoint].route_file_path&.end_with?("all.rb")
-          endpoints << @routes[parent_key][:endpoint]
-        end
+      canonical_hierarchy_entries(final_route_data[:path]).each do |entry|
+        append_endpoint(endpoints, entry[:all])
+        append_endpoint(endpoints, entry[:methods][method])
       end
 
-      # If no parents found, use the final endpoint
-      endpoints << final_route_data[:endpoint] if endpoints.empty?
+      append_endpoint(endpoints, final_route_data[:endpoint]) if endpoints.empty?
 
       result = {
         endpoint: final_route_data[:endpoint],
         endpoints: endpoints
       }
 
-      # Preserve params if they exist in the final route data
       result[:params] = final_route_data[:params] if final_route_data[:params]
 
       result
+    end
+
+    def canonical_hierarchy_entries(path_pattern)
+      canonical_path_prefixes(path_pattern).filter_map do |path_prefix|
+        @entries_by_path[path_prefix]
+      end
+    end
+
+    def canonical_path_prefixes(path_pattern)
+      parts = path_pattern.split("/").reject(&:empty?)
+      return ["/"] if parts.empty?
+
+      ["/"] + parts.each_index.map do |index|
+        "/" + parts.first(index + 1).join("/")
+      end
+    end
+
+    def append_endpoint(endpoints, endpoint)
+      return unless endpoint
+
+      endpoints << endpoint unless endpoints.include?(endpoint)
     end
 
     # Find a route by pattern matching with parameter extraction.
@@ -148,28 +186,33 @@ module Raxon
     # @param path [String] Request path
     # @return [Hash, nil] Route data with extracted params if found, nil otherwise
     def find_pattern_match(method, path)
-      method_upcase = method.upcase
-      matching_route = nil
+      matching_route = find_pattern_candidate(method, path) || find_all_pattern_candidate(path)
 
-      @routes.each do |route_key, route_data|
-        # Fast skip if the method does not match
-        next if route_key[:method] != method_upcase
+      route_data_with_hierarchy(matching_route, method) if matching_route
+    end
 
-        match = route_data[:mustermann].match(path)
+    def find_pattern_candidate(method, path)
+      @entries_by_path.each_value do |entry|
+        endpoint = entry[:methods][method]
+        next unless endpoint
 
-        # If there is a match, take the named captures,
-        # transforming the keys into symbols and merge
-        # that hash into the existing route data.
-        if match
-          matching_route = route_data.merge(params: match.named_captures.transform_keys(&:to_sym))
-          break
-        end
+        match = entry[:mustermann].match(path)
+        return route_data(entry, endpoint).merge(params: match.named_captures.transform_keys(&:to_sym)) if match
       end
 
-      # Build hierarchy if we found a match
-      if matching_route
-        route_data_with_hierarchy(matching_route, method, path)
+      nil
+    end
+
+    def find_all_pattern_candidate(path)
+      @entries_by_path.each_value do |entry|
+        endpoint = entry[:all]
+        next unless endpoint
+
+        match = entry[:mustermann].match(path)
+        return route_data(entry, endpoint).merge(params: match.named_captures.transform_keys(&:to_sym)) if match
       end
+
+      nil
     end
 
     # Create a route key for storage and lookup.

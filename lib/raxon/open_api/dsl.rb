@@ -331,7 +331,8 @@ module Raxon
       #   property_to_items_type(property)  # => {"$ref": "#/components/schemas/User"}
       #
       def self.property_to_items_type(property)
-        @@components.map(&:name).include?(property.of.to_s) ? {"$ref": "#/components/schemas/#{property.of}"} : {type: property.of.to_s}
+        item_type = property.as || property.of
+        @@components.map(&:name).include?(item_type.to_s) ? {"$ref": "#/components/schemas/#{item_type}"} : {type: item_type.to_s}
       end
 
       # Convert a property to OpenAPI JSON schema format.
@@ -347,20 +348,22 @@ module Raxon
       #   property_to_json(:name, property)  # => [:name, {type: "string", description: "..."}]
       #
       def self.property_to_json(name, property)
-        # Handle schema references - check both `as:` and `of:` for object types
-        if property.as || (property.type == "object" && property.of)
-          [name, reference_property_definition(property)]
+        definition = case property.type
+        when "array"
+          array_property_definition(property)
+        when "file"
+          file_property_definition(property)
+        when Array
+          union_type_definition(property)
         else
-          definition = case property.type
-          when "array"
-            array_property_definition(property)
-          when Array
-            union_type_definition(property)
+          if property.as || (property.type == "object" && property.of)
+            reference_property_definition(property)
           else
             standard_property_definition(property)
           end
-          [name, definition]
         end
+
+        [name, definition]
       end
 
       # Generate definition for a property that references a component schema.
@@ -372,19 +375,10 @@ module Raxon
       def self.reference_property_definition(property)
         ref_name = property.as || property.of
 
-        if property.type == "array"
-          {
-            type: "array",
-            items: {
-              "$ref" => "#/components/schemas/#{ref_name}"
-            }
-          }
-        else
-          {
-            "$ref" => "#/components/schemas/#{ref_name}",
-            **merge_nullable(property)
-          }
-        end
+        {
+          "$ref" => "#/components/schemas/#{ref_name}",
+          **merge_nullable(property)
+        }
       end
 
       # Generate definition for an array property.
@@ -394,20 +388,40 @@ module Raxon
       #
       # @private
       def self.array_property_definition(property)
-        items = if property.properties&.any? && !property.of
-          {type: "object", **merge_nullable(property), **properties_to_json(property.properties)}
-        else
-          {**property_to_items_type(property), **merge_nullable(property)}
-        end
-
-        if property.of.to_s == "object" && property.properties
-          items.merge!(properties_to_json(property.properties))
-        end
-
         {
           type: property.type,
           description: property.description,
-          items: items
+          **merge_nullable(property),
+          items: array_items_definition(property)
+        }
+      end
+
+      # Generate the item schema for an array property.
+      #
+      # @param property [Property, Component, Response] The array property object
+      # @return [Hash] OpenAPI items schema
+      #
+      # @private
+      def self.array_items_definition(property)
+        return {type: "object", **properties_to_json(property.properties)} if property.properties&.any? && !property.of
+
+        items = property_to_items_type(property)
+        items.merge!(properties_to_json(property.properties)) if property.of.to_s == "object" && property.properties
+        items
+      end
+
+      # Generate definition for a file upload property.
+      #
+      # @param property [Property, Component, Response] The property object
+      # @return [Hash] OpenAPI binary string property definition
+      #
+      # @private
+      def self.file_property_definition(property)
+        {
+          type: "string",
+          format: "binary",
+          description: property.description,
+          **merge_nullable(property)
         }
       end
 
@@ -625,11 +639,21 @@ module Raxon
           description: request_body.description.to_s,
           required: request_body.required,
           content: {
-            "application/json" => {
+            request_body_media_type(request_body) => {
               schema: property_to_json("schema", request_body)[1].except(:description)
             }
           }
         }
+      end
+
+      # Return the OpenAPI media type for a request body definition.
+      #
+      # @param request_body [RequestBody] The request body definition
+      # @return [String] OpenAPI media type
+      #
+      # @private
+      def self.request_body_media_type(request_body)
+        request_body.type == "multipart" ? "multipart/form-data" : "application/json"
       end
 
       # Build the components section of the OpenAPI specification.

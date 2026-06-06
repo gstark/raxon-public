@@ -143,23 +143,16 @@ module Raxon
         @validated_params = base_params
       end
 
-      coerce_file_params
+      coerce_request_body_params
     end
 
-    # Wrap raw Rack file hashes in Raxon::UploadedFile for properties declared as type: :file.
+    # Coerce request body params according to the endpoint's request body definition.
     #
     # @return [void]
     #
     # @private
-    def coerce_file_params
-      return unless @endpoint&.request_body&.properties&.any?
-
-      @endpoint.request_body.properties.each do |name, property|
-        next unless property.type == "file"
-        next unless @validated_params[name].is_a?(Hash)
-
-        @validated_params[name] = Raxon::UploadedFile.new(@validated_params[name])
-      end
+    def coerce_request_body_params
+      @validated_params = Raxon::OpenApi::RequestBodyCoercer.new(@endpoint&.request_body).call(@validated_params)
     end
 
     # Get the request path.

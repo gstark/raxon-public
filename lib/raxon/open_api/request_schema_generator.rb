@@ -20,6 +20,7 @@ module Raxon
       def initialize(parameters, request_body = nil)
         @parameters = parameters
         @request_body = request_body
+        @property_schema_builder = PropertySchemaBuilder.new
       end
 
       # Generate a Dry::Schema from the parameter definitions.
@@ -36,221 +37,33 @@ module Raxon
 
         params = @parameters.parameters
         request_body = @request_body
-        generator = self
+        builder = @property_schema_builder
 
-        Dry::Schema.Params do
+        schema = Dry::Schema.Params do
           params.each do |param|
-            generator.add_parameter_to_schema(self, param)
+            builder.add_parameter_to_schema(self, param)
           end
 
           # Add request body properties at the top level
           if request_body&.properties&.any?
-            generator.add_properties_to_schema(self, request_body.properties)
+            builder.add_properties_to_schema(self, request_body.properties)
           end
         end
+
+        file_upload_fields?(request_body) ? FileUploadValidator.new(schema, request_body) : schema
       end
 
-      # Add a single parameter to the Dry::Schema DSL context.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param param [Raxon::OpenApi::Parameter] The parameter to add
-      def add_parameter_to_schema(schema_context, param)
-        add_field_to_schema(schema_context, param.name.to_sym, param)
-      end
-
-      # Add nested properties to a hash schema context.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param properties [Hash<Symbol, Raxon::OpenApi::Property>] The properties to add
-      def add_properties_to_schema(schema_context, properties)
-        properties.each do |prop_name, property|
-          add_property_to_schema(schema_context, prop_name, property)
-        end
-      end
-
-      # Add a single property to the Dry::Schema DSL context.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param prop_name [Symbol] The property name
-      # @param property [Raxon::OpenApi::Property] The property definition
-      def add_property_to_schema(schema_context, prop_name, property)
-        add_field_to_schema(schema_context, prop_name, property)
-      end
-
-      # Add a field (parameter or property) to the Dry::Schema DSL context.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Parameter, Raxon::OpenApi::Property] The field definition
-      #
-      # @private
-      def add_field_to_schema(schema_context, field_name, field)
-        map_type_to_dry(field.type)
-        generator = self
-
-        if field.type == "object" && field.properties.any?
-          add_object_field(schema_context, field_name, field, generator)
-        elsif field.type == "array"
-          add_array_field(schema_context, field_name, field)
-        elsif field.type == "file"
-          add_file_field(schema_context, field_name, field)
-        elsif field.required
-          add_required_scalar_field(schema_context, field_name, field.type, nullable: field.nullable)
-        else
-          add_optional_scalar_field(schema_context, field_name, field.type, nullable: field.nullable)
-        end
-      end
-
-      # Add an object field with nested properties.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Parameter, Raxon::OpenApi::Property] The field definition
-      # @param generator [RequestSchemaGenerator] The generator instance
-      #
-      # @private
-      def add_object_field(schema_context, field_name, field, generator)
-        if field.required
-          schema_context.required(field_name).hash do
-            generator.add_properties_to_schema(self, field.properties)
-          end
-        else
-          schema_context.optional(field_name).hash do
-            generator.add_properties_to_schema(self, field.properties)
-          end
-        end
-      end
-
-      # Add an array field.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Parameter, Raxon::OpenApi::Property] The field definition
-      #
-      # @private
-      def add_array_field(schema_context, field_name, field)
-        if field.required
-          if field.nullable
-            schema_context.required(field_name).maybe(:array)
-          else
-            schema_context.required(field_name).value(:array)
-          end
-        else
-          if field.nullable
-            schema_context.optional(field_name).maybe(:array)
-          else
-            schema_context.optional(field_name).value(:array)
-          end
-        end
-      end
-
-      # Add a file field that accepts any value (Rack file hashes).
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field [Raxon::OpenApi::Parameter, Raxon::OpenApi::Property] The field definition
-      #
-      # @private
-      def add_file_field(schema_context, field_name, field)
-        if field.required
-          schema_context.required(field_name).filled
-        else
-          schema_context.optional(field_name)
-        end
-      end
-
-      # Add a required scalar field with type coercion.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field_type [String] The field type
-      #
-      # @private
-      def add_required_scalar_field(schema_context, field_name, field_type, nullable: false)
-        case field_type
-        when "string"
-          if nullable
-            schema_context.required(field_name).maybe(:string)
-          else
-            schema_context.required(field_name).value(:string)
-          end
-        when "number"
-          if nullable
-            schema_context.required(field_name).maybe(:integer)
-          else
-            schema_context.required(field_name).filled(:integer)
-          end
-        when "boolean"
-          if nullable
-            schema_context.required(field_name).maybe(:bool)
-          else
-            schema_context.required(field_name).filled(:bool)
-          end
-        else
-          if nullable
-            schema_context.required(field_name).maybe(:string)
-          else
-            schema_context.required(field_name).filled
-          end
-        end
-      end
-
-      # Add an optional scalar field with type coercion.
-      #
-      # @param schema_context [Dry::Schema::DSL] The schema DSL context
-      # @param field_name [Symbol] The field name
-      # @param field_type [String] The field type
-      #
-      # @private
-      def add_optional_scalar_field(schema_context, field_name, field_type, nullable: false)
-        case field_type
-        when "string"
-          if nullable
-            schema_context.optional(field_name).maybe(:string)
-          else
-            schema_context.optional(field_name).value(:string)
-          end
-        when "number"
-          schema_context.optional(field_name).maybe(:integer)
-        when "boolean"
-          schema_context.optional(field_name).maybe(:bool)
-        else
-          if nullable
-            schema_context.optional(field_name).maybe(:string)
-          else
-            schema_context.optional(field_name).value(:string)
-          end
-        end
-      end
-
-      # Map OpenAPI types to Dry::Types specifications.
-      #
-      # @param openapi_type [String] The OpenAPI type
-      # @return [String] The corresponding Dry::Types specification
-      #
-      # @example
-      #   map_type_to_dry("string")   # => "params.integer"
-      #   map_type_to_dry("number")   # => "params.integer"
-      #   map_type_to_dry("boolean")  # => "params.bool"
       def map_type_to_dry(openapi_type)
-        case openapi_type
-        when "string"
-          "params.string"
-        when "number"
-          # Use integer for number type
-          # Dry::Schema::Params will coerce "42" to 42
-          "params.integer"
-        when "boolean"
-          "params.bool"
-        when "object"
-          "params.hash"
-        when "array"
-          "params.array"
-        when "file"
-          "params.any"
-        else
-          # Default to string for unknown types
-          "params.string"
+        @property_schema_builder.map_type_to_dry(openapi_type)
+      end
+
+      private
+
+      def file_upload_fields?(field)
+        return false unless field&.properties&.any?
+
+        field.properties.any? do |_name, property|
+          property.type == "file" || file_upload_fields?(property)
         end
       end
     end

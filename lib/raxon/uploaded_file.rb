@@ -21,6 +21,14 @@ module Raxon
 
     def_delegators :tempfile, :read, :rewind, :size, :eof?, :close, :path
 
+    def self.rack_file_hash?(value)
+      value.is_a?(Hash) && (value.key?(:tempfile) || value.key?("tempfile"))
+    end
+
+    def self.valid_upload?(value)
+      value.is_a?(self) || rack_file_hash?(value)
+    end
+
     def initialize(hash)
       @tempfile = hash[:tempfile] || hash["tempfile"]
       @original_filename = hash[:filename] || hash["filename"]

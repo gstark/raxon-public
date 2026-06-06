@@ -318,6 +318,73 @@ RSpec.describe Raxon::RouteLoader do
       end
     end
 
+    it "uses the longest matching routes directory when configured directories overlap" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        routes = File.join(dir, "routes")
+        nested_routes = File.join(routes, "api")
+        FileUtils.mkdir_p(File.join(nested_routes, "admin"))
+
+        File.write(File.join(nested_routes, "admin/get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.handler { |request, response| response.body = {path: endpoint.path} }
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = [routes, nested_routes] }
+        Raxon::RouteLoader.reset!
+        Raxon::RouteLoader.load!
+
+        expect(Raxon::RouteLoader.routes.find("GET", "/admin")).not_to be_nil
+        expect(Raxon::RouteLoader.routes.find("GET", "/api/admin")).to be_nil
+      end
+    end
+
+    it "deduplicates configured routes directories after expansion" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        routes = File.join(dir, "routes")
+        FileUtils.mkdir_p(routes)
+
+        File.write(File.join(routes, "get.rb"), <<~RUBY)
+          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            endpoint.handler { |request, response| response.body = {ok: true} }
+          end
+        RUBY
+
+        Raxon.configure { |config| config.routes_directory = [routes, File.join(routes, ".")] }
+        Raxon::RouteLoader.reset!
+
+        loaded_files = []
+        allow(Raxon::RouteLoader).to receive(:load_route_in_isolation).and_wrap_original do |method, file|
+          loaded_files << file
+          method.call(file)
+        end
+
+        Raxon::RouteLoader.load!
+
+        expect(loaded_files.size).to eq(1)
+        expect(Raxon::RouteLoader.routes.find("GET", "/")).not_to be_nil
+      end
+    end
+
+    it "raises a helpful error when a route file is outside all configured routes directories" do
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        routes = File.join(dir, "routes")
+        outside = File.join(dir, "outside", "get.rb")
+        FileUtils.mkdir_p(routes)
+        FileUtils.mkdir_p(File.dirname(outside))
+
+        Raxon.configure { |config| config.routes_directory = routes }
+        Raxon::RouteLoader.reset!
+
+        expect {
+          Raxon::RouteLoader.register(outside) { |endpoint| endpoint.handler { |_request, response| response.body = {} } }
+        }.to raise_error(Raxon::Error, /Route file #{Regexp.escape(outside)} is not inside configured routes_directory: #{Regexp.escape(routes)}/)
+      end
+    end
+
     it "loads all.rb files before method-specific files" do
       # Create a temporary test directory
       require "tmpdir"

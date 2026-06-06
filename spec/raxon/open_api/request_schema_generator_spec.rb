@@ -231,6 +231,22 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
         expect(result.success?).to be true
         expect(result.to_h).to eq({tags: ["ruby", "rails"]})
       end
+
+      it "validates request body array item object properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :users, type: :array, of: :object, required: true do |user|
+          user.property :id, type: :number, required: true
+        end
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(users: [{}])
+
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:users)
+      end
     end
 
     context "with mixed parameter locations" do
@@ -394,6 +410,64 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
         tempfile.close!
       end
 
+      it "accepts already wrapped file uploads for required file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        tempfile = Tempfile.new("upload")
+        uploaded_file = Raxon::UploadedFile.new({tempfile: tempfile, filename: "photo.jpg", type: "image/jpeg"})
+
+        result = schema.call(photo: uploaded_file)
+        expect(result.success?).to be true
+        expect(result.to_h[:photo]).to eq(uploaded_file)
+
+        tempfile.close!
+      end
+
+      it "rejects invalid file values for required file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        ["not a file", {filename: "photo.jpg"}, Object.new].each do |invalid_value|
+          result = schema.call(photo: invalid_value)
+          expect(result.success?).to be false
+          expect(result.errors.to_h).to have_key(:photo)
+        end
+      end
+
+      it "validates file fields inside array object items" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :attachments, type: :array, of: :object do |attachment|
+          attachment.property :file, type: :file, required: true
+        end
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        tempfile = Tempfile.new("upload")
+        file_hash = {tempfile: tempfile, filename: "document.pdf", type: "application/pdf"}
+
+        expect(schema.call(attachments: [{file: file_hash}]).success?).to be true
+
+        invalid_result = schema.call(attachments: [{file: "not a file"}])
+        expect(invalid_result.success?).to be false
+        expect(invalid_result.errors.to_h).to have_key(:attachments)
+
+        tempfile.close!
+      end
+
       it "allows missing optional file fields" do
         parameters = Raxon::OpenApi::Parameters.new
 
@@ -451,6 +525,32 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
         expect(result.success?).to be false
       end
 
+      it "rejects nil for non-nullable optional number properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :score, type: :number, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(score: nil)
+        expect(result.success?).to be false
+      end
+
+      it "rejects nil for non-nullable optional boolean properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :active, type: :boolean, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(active: nil)
+        expect(result.success?).to be false
+      end
+
       it "allows nil for nullable required string properties" do
         parameters = Raxon::OpenApi::Parameters.new
 
@@ -487,6 +587,34 @@ RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
         schema = generator.to_dry_schema
 
         result = schema.call(tags: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable object properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :metadata, type: :object, required: false, nullable: true do |metadata|
+          metadata.property :name, type: :string, required: true
+        end
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(metadata: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable file properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(photo: nil)
         expect(result.success?).to be true
       end
 

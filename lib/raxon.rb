@@ -22,6 +22,10 @@ require_relative "raxon/open_api/error"
 
 # Load all OpenApi related files
 require_relative "raxon/open_api/dsl"
+require_relative "raxon/uploaded_file"
+require_relative "raxon/open_api/property_schema_builder"
+require_relative "raxon/open_api/request_body_coercer"
+require_relative "raxon/open_api/file_upload_validator"
 require_relative "raxon/open_api/request_schema_generator"
 require_relative "raxon/open_api/response_schema_generator"
 
@@ -40,7 +44,6 @@ require_relative "raxon/routes"
 require_relative "raxon/route_loader"
 require_relative "raxon/router"
 require_relative "raxon/server"
-require_relative "raxon/uploaded_file"
 require_relative "raxon/version"
 
 module Raxon

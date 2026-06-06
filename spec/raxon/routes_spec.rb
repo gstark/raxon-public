@@ -155,6 +155,21 @@ RSpec.describe Raxon::Routes do
         expect(result[:endpoints]).to eq([parent_endpoint, child_endpoint])
       end
 
+      it "includes root all route before canonical parent and child routes" do
+        root_endpoint = Raxon::OpenApi::Endpoint.new
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/", root_endpoint)
+        routes.register("ALL", "/orgs/{org_id}", parent_endpoint)
+        routes.register("GET", "/orgs/{org_id}/users", child_endpoint)
+
+        result = routes.find("GET", "/orgs/123/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([root_endpoint, parent_endpoint, child_endpoint])
+      end
+
       it "builds hierarchy with multiple levels" do
         level1 = Raxon::OpenApi::Endpoint.new
         level2 = Raxon::OpenApi::Endpoint.new
@@ -204,6 +219,93 @@ RSpec.describe Raxon::Routes do
         expect(result[:endpoint]).to eq(child_endpoint)
         expect(result[:endpoints]).to include(parent_endpoint)
         expect(result[:endpoints].size).to be >= 1
+      end
+
+      it "keeps all routes separate from method-specific routes at the same path" do
+        all_endpoint = Raxon::OpenApi::Endpoint.new
+        get_endpoint = Raxon::OpenApi::Endpoint.new
+        post_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/api/users", all_endpoint)
+        routes.register("GET", "/api/users", get_endpoint)
+        routes.register("POST", "/api/users", post_endpoint)
+
+        get_result = routes.find("GET", "/api/users")
+        post_result = routes.find("POST", "/api/users")
+
+        expect(get_result[:endpoint]).to eq(get_endpoint)
+        expect(get_result[:endpoints]).to eq([all_endpoint, get_endpoint])
+        expect(post_result[:endpoint]).to eq(post_endpoint)
+        expect(post_result[:endpoints]).to eq([all_endpoint, post_endpoint])
+      end
+
+      it "includes parameterized parent routes in the hierarchy" do
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/orgs/{org_id}", parent_endpoint)
+        routes.register("GET", "/orgs/{org_id}/users", child_endpoint)
+
+        result = routes.find("GET", "/orgs/123/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([parent_endpoint, child_endpoint])
+        expect(result[:params]).to eq(org_id: "123")
+      end
+
+      it "uses the exact winning child route pattern to include its parameterized canonical parent" do
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_all_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/orgs/{org_id}", parent_endpoint)
+        routes.register("ALL", "/orgs/{org_id}/users", child_all_endpoint)
+        routes.register("GET", "/orgs/{org_id}/users", child_endpoint)
+
+        result = routes.find("GET", "/orgs/123/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([parent_endpoint, child_all_endpoint, child_endpoint])
+        expect(result[:params]).to eq(org_id: "123")
+      end
+
+      it "orders all and method-specific endpoints from parent to child" do
+        root_all = Raxon::OpenApi::Endpoint.new
+        parent_all = Raxon::OpenApi::Endpoint.new
+        parent_get = Raxon::OpenApi::Endpoint.new
+        child_all = Raxon::OpenApi::Endpoint.new
+        child_get = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/", root_all)
+        routes.register("ALL", "/api", parent_all)
+        routes.register("GET", "/api", parent_get)
+        routes.register("ALL", "/api/users", child_all)
+        routes.register("GET", "/api/users", child_get)
+
+        result = routes.find("GET", "/api/users")
+
+        expect(result[:endpoint]).to eq(child_get)
+        expect(result[:endpoints]).to eq([root_all, parent_all, parent_get, child_all, child_get])
+      end
+
+      it "does not include unrelated parameterized parent routes that merely match the concrete prefix" do
+        unrelated_parent = Raxon::OpenApi::Endpoint.new
+        canonical_parent = Raxon::OpenApi::Endpoint.new
+        child = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/{tenant_id}/users", unrelated_parent)
+        routes.register("ALL", "/orgs/{org_id}", canonical_parent)
+        routes.register("GET", "/orgs/{org_id}/users", child)
+
+        result = routes.find("GET", "/orgs/users/users")
+        endpoint_names = {
+          unrelated_parent => "unrelated_parent",
+          canonical_parent => "canonical_parent",
+          child => "child"
+        }
+
+        expect(result[:endpoint]).to eq(child)
+        expect(result[:endpoints].map { |endpoint| endpoint_names.fetch(endpoint) }).to eq(["canonical_parent", "child"])
       end
     end
   end

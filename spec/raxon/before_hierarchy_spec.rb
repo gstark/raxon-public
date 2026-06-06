@@ -79,7 +79,7 @@ RSpec.describe "Before block execution hierarchy" do
         endpoint.handler do |request, response|
           execution_order << :handler
           response.code = :ok
-          response.body = {id: "1"}
+          response.body = [{id: "1"}]
         end
       end
 

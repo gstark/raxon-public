@@ -216,6 +216,53 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(schema_properties["value"]).to include("type" => "number")
     end
 
+    it "creates multipart requestBody with OpenAPI binary file properties" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:post)
+        endpoint.path("/api/v1/photos")
+
+        endpoint.request_body type: :multipart, description: "Photo upload", required: true do |body|
+          body.property(:photo, type: :file, description: "Photo file")
+          body.property(:caption, type: :string, required: false)
+        end
+
+        endpoint.response(201, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      request_body = spec["paths"]["/api/v1/photos"]["post"]["requestBody"]
+
+      expect(request_body["content"]).to have_key("multipart/form-data")
+      expect(request_body["content"]).not_to have_key("application/json")
+
+      schema = request_body["content"]["multipart/form-data"]["schema"]
+      expect(schema["properties"]["photo"]).to include(
+        "type" => "string",
+        "format" => "binary",
+        "description" => "Photo file"
+      )
+      expect(schema["properties"]["caption"]).to include("type" => "string")
+    end
+
+    it "keeps object request bodies as application/json" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:post)
+        endpoint.path("/api/v1/widgets")
+
+        endpoint.request_body type: :object, required: true do |body|
+          body.property(:name, type: :string)
+        end
+
+        endpoint.response(201, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      request_body = spec["paths"]["/api/v1/widgets"]["post"]["requestBody"]
+
+      expect(request_body["content"]).to have_key("application/json")
+      expect(request_body["content"]).not_to have_key("multipart/form-data")
+    end
+
     it "converts symbol status codes to numeric codes in OpenAPI output" do
       described_class.endpoint do |endpoint|
         endpoint.operation(:get)
@@ -337,6 +384,58 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(response_schema["items"]["properties"]["name"]["type"]).to eq("string")
     end
 
+    it "puts nullable on array schemas instead of array items" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/tags")
+
+        endpoint.response(:ok, type: :array, of: :string, nullable: true)
+      end
+
+      spec = described_class.to_open_api
+      response_schema = spec["paths"]["/api/v1/tags"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+      expect(response_schema["nullable"]).to eq(true)
+      expect(response_schema["items"]).to eq({"type" => "string"})
+    end
+
+    it "puts nullable on component-backed array schemas" do
+      described_class.component("User", type: :object) do |component|
+        component.property(:id, type: :number)
+      end
+
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/component-users")
+
+        endpoint.response(:ok, type: :array, as: :User, nullable: true)
+      end
+
+      spec = described_class.to_open_api
+      response_schema = spec["paths"]["/api/v1/component-users"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+      expect(response_schema["nullable"]).to eq(true)
+      expect(response_schema["items"]).to eq({"$ref" => "#/components/schemas/User"})
+    end
+
+    it "puts nullable on inline array response schemas instead of inline item schemas" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/nullable-users")
+
+        endpoint.response(:ok, type: :array, nullable: true) do |response|
+          response.property(:id, type: :number)
+        end
+      end
+
+      spec = described_class.to_open_api
+      response_schema = spec["paths"]["/api/v1/nullable-users"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+      expect(response_schema["nullable"]).to eq(true)
+      expect(response_schema["items"]).not_to have_key("nullable")
+      expect(response_schema["items"]["type"]).to eq("object")
+    end
+
     it "prefers as: over of: when both are provided for object type" do
       described_class.component("Primary", type: :object) do |c|
         c.property(:name, type: :string)
@@ -373,8 +472,8 @@ RSpec.describe Raxon::OpenApi::DSL do
       schemas = endpoint.response_schemas
 
       expect(schemas.keys).to contain_exactly(200, 404)
-      expect(schemas[200]).to be_a(Dry::Schema::Params)
-      expect(schemas[404]).to be_a(Dry::Schema::Params)
+      expect(schemas[200]).to respond_to(:call)
+      expect(schemas[404]).to respond_to(:call)
     end
 
     it "validates response body matches schema" do
@@ -404,16 +503,18 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(result.errors.to_h).to have_key(:status)
     end
 
-    it "returns nil schema for array responses with properties" do
+    it "generates schema for array responses with inline item properties" do
       endpoint = Raxon::OpenApi::Endpoint.new
       endpoint.response 200, type: :array do |response|
         response.property :id, type: :number, required: true
         response.property :name, type: :string, required: true
       end
 
-      schemas = endpoint.response_schemas
+      schema = endpoint.response_schemas[200]
+      result = schema.call([{id: "1", name: "Alice"}])
 
-      expect(schemas).to eq({})
+      expect(result.success?).to be true
+      expect(result.to_h).to eq([{id: 1.0, name: "Alice"}])
     end
 
     it "returns empty hash when no responses have properties" do
@@ -534,7 +635,7 @@ RSpec.describe Raxon::OpenApi::DSL do
       })
     end
 
-    it "skips validation for array responses with properties" do
+    it "validates array responses with inline item properties" do
       Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :array do |response|
           response.property :id, type: :number, required: true
@@ -556,6 +657,29 @@ RSpec.describe Raxon::OpenApi::DSL do
         {"id" => 1, "name" => "Alice"},
         {"id" => 2, "name" => "Bob"}
       ])
+    end
+
+    it "returns 500 when array response item validation fails" do
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.response 200, type: :array do |response|
+          response.property :id, type: :number, required: true
+          response.property :name, type: :string, required: true
+        end
+
+        endpoint.handler do |request, response|
+          response.code = :ok
+          response.body = [{id: 1, name: "Alice"}, {id: 2}]
+        end
+      end
+
+      env = Rack::MockRequest.env_for("/test")
+      status, _, body = Raxon::Router.new.call(env)
+
+      expect(status).to eq(500)
+      json_body = JSON.parse(body.first)
+      expect(json_body["error"]).to eq("Response validation failed")
+      expect(json_body["details"]).to have_key("1")
+      expect(json_body["details"]["1"]).to have_key("name")
     end
 
     it "fails validation when nested properties are missing" do

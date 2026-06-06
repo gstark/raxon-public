@@ -49,17 +49,30 @@ module Raxon
 
       table = TTY::Table.new(header: headers, rows: rows)
 
-      # Configure rendering options based on output type
+      # Configure rendering options based on output type.
       render_options = {padding: [0, 1]}
       if $stdout.respond_to?(:tty?) && $stdout.tty?
-        # For real TTY, enable auto-resizing
+        # For real TTY, enable auto-resizing.
         render_options[:resize] = true
       else
-        # For non-TTY (like StringIO in tests), use explicit width to avoid ioctl
-        render_options[:width] = 120
+        # For non-TTY (like StringIO in tests), use an explicit width to avoid
+        # ioctl and keep the table horizontal without TTY::Table warning and
+        # rotating wide tables to vertical orientation.
+        render_options[:width] = [120, table_width(headers, rows)].max
       end
 
       puts table.render(:unicode, render_options)
+    end
+
+    def table_width(headers, rows)
+      column_widths = headers.each_index.map do |index|
+        ([headers[index]] + rows.map { |row| row[index] }).map { |value| value.to_s.length }.max
+      end
+
+      padding_width = 2 * headers.length
+      border_width = headers.length + 1
+
+      column_widths.sum + padding_width + border_width
     end
 
     def display_summary(routes)

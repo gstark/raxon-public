@@ -241,6 +241,40 @@ RSpec.describe Raxon::Router do
         expect(handler_call_count).to eq(0)
       end
 
+      it "executes only root all, parent all, child all, and final method-specific route blocks" do
+        execution_order = []
+
+        root_all = Raxon::OpenApi::Endpoint.new
+        root_all.before { |_request, _response, _metadata| execution_order << "ALL /" }
+
+        parent_all = Raxon::OpenApi::Endpoint.new
+        parent_all.before { |_request, _response, _metadata| execution_order << "ALL /api" }
+
+        parent_get = Raxon::OpenApi::Endpoint.new
+        parent_get.handler { |_request, _response, _metadata| execution_order << "GET /api" }
+
+        child_all = Raxon::OpenApi::Endpoint.new
+        child_all.before { |_request, _response, _metadata| execution_order << "ALL /api/users" }
+
+        child_get = Raxon::OpenApi::Endpoint.new
+        child_get.handler do |_request, response, _metadata|
+          execution_order << "GET /api/users"
+          response.code = :ok
+          response.body = {success: true}
+        end
+
+        Raxon::RouteLoader.routes.register("ALL", "/", root_all)
+        Raxon::RouteLoader.routes.register("ALL", "/api", parent_all)
+        Raxon::RouteLoader.routes.register("GET", "/api", parent_get)
+        Raxon::RouteLoader.routes.register("ALL", "/api/users", child_all)
+        Raxon::RouteLoader.routes.register("GET", "/api/users", child_get)
+
+        env = Rack::MockRequest.env_for("/api/users", method: "GET")
+        Raxon::Router.new.call(env)
+
+        expect(execution_order).to eq(["ALL /", "ALL /api", "ALL /api/users", "GET /api/users"])
+      end
+
       it "does not re-execute before blocks when handler is called in hierarchy" do
         parent_call_count = 0
         handler_call_count = 0

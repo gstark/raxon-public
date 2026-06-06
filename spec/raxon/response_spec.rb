@@ -228,6 +228,47 @@ RSpec.describe Raxon::Response do
       expect(response.halted?).to be(true)
       expect(response.runnable?).to be(false)
     end
+
+    it "sets code and body before halting" do
+      response = Raxon::Response.new
+
+      begin
+        response.halt code: :unauthorized, body: {error: "Invalid API key"}
+      rescue Raxon::HaltException
+        # Exception raised as expected
+      end
+
+      expect(response.status_code).to eq(401)
+      expect(response.body).to eq({error: "Invalid API key"})
+      expect(response.halted?).to be(true)
+    end
+
+    it "sets numeric code before halting" do
+      response = Raxon::Response.new
+
+      begin
+        response.halt code: 418
+      rescue Raxon::HaltException
+        # Exception raised as expected
+      end
+
+      expect(response.status_code).to eq(418)
+      expect(response.halted?).to be(true)
+    end
+
+    it "allows halting with a nil body" do
+      response = Raxon::Response.new
+      response.body = {previous: "body"}
+
+      begin
+        response.halt body: nil
+      rescue Raxon::HaltException
+        # Exception raised as expected
+      end
+
+      expect(response.body).to be_nil
+      expect(response.halted?).to be(true)
+    end
   end
 
   describe "#runnable?" do
