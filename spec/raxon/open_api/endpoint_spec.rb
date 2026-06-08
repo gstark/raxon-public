@@ -32,10 +32,164 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     end
   end
 
+  describe "operation metadata" do
+    it "sets summary" do
+      endpoint = described_class.new
+      endpoint.summary("List posts")
+      expect(endpoint.summary).to eq("List posts")
+    end
+
+    it "sets operation_id" do
+      endpoint = described_class.new
+      endpoint.operation_id("listPosts")
+      expect(endpoint.operation_id).to eq("listPosts")
+    end
+
+    it "sets tags from varargs" do
+      endpoint = described_class.new
+      endpoint.tags("Posts", "Public")
+      expect(endpoint.tags).to eq(["Posts", "Public"])
+    end
+
+    it "sets tags from an array" do
+      endpoint = described_class.new
+      endpoint.tags(["Posts", "Public"])
+      expect(endpoint.tags).to eq(["Posts", "Public"])
+    end
+
+    it "sets deprecated flag" do
+      endpoint = described_class.new
+      endpoint.deprecated(true)
+      expect(endpoint.deprecated).to be(true)
+    end
+
+    it "defaults deprecated to false" do
+      endpoint = described_class.new
+      expect(endpoint.deprecated).to be(false)
+    end
+
+    it "sets security from a scheme name" do
+      endpoint = described_class.new
+      endpoint.security(:api_key)
+      expect(endpoint.security).to eq([{api_key: []}])
+    end
+
+    it "sets security from a scheme name with scopes" do
+      endpoint = described_class.new
+      endpoint.security(:oauth2, scopes: ["read:posts"])
+      expect(endpoint.security).to eq([{oauth2: ["read:posts"]}])
+    end
+
+    it "sets security from an explicit OpenAPI security requirement array" do
+      endpoint = described_class.new
+      requirements = [{api_key: []}, {oauth2: ["read"]}]
+      endpoint.security(requirements)
+      expect(endpoint.security).to eq(requirements)
+    end
+  end
+
   describe "#parameters" do
     it "yields the parameters object" do
       endpoint = described_class.new
       expect { |b| endpoint.parameters(&b) }.to yield_with_args(an_instance_of(Raxon::OpenApi::Parameters))
+    end
+  end
+
+  describe "parameter shorthands" do
+    it "defines a required path parameter" do
+      endpoint = described_class.new
+
+      result = endpoint.path_param :id, type: :string, description: "User ID"
+
+      parameter = endpoint.parameters.parameters.first
+      expect(result).to eq(parameter)
+      expect(parameter.name).to eq(:id)
+      expect(parameter.type).to eq("string")
+      expect(parameter.in).to eq(:path)
+      expect(parameter.required).to be(true)
+      expect(parameter.description).to eq("User ID")
+    end
+
+    it "allows path parameter required to be overridden" do
+      endpoint = described_class.new
+
+      endpoint.path_param :id, type: :string, required: false
+
+      expect(endpoint.parameters.parameters.first.required).to be(false)
+    end
+
+    it "defines an optional query parameter by default" do
+      endpoint = described_class.new
+
+      endpoint.query_param :page, type: :number
+
+      parameter = endpoint.parameters.parameters.first
+      expect(parameter.name).to eq(:page)
+      expect(parameter.in).to eq(:query)
+      expect(parameter.required).to be(false)
+      expect(parameter.type).to eq("number")
+    end
+
+    it "allows query parameters to be required" do
+      endpoint = described_class.new
+
+      endpoint.query_param :search, type: :string, required: true
+
+      expect(endpoint.parameters.parameters.first.required).to be(true)
+    end
+
+    it "defines an optional header parameter by default" do
+      endpoint = described_class.new
+
+      endpoint.header_param :authorization, type: :string
+
+      parameter = endpoint.parameters.parameters.first
+      expect(parameter.name).to eq(:authorization)
+      expect(parameter.in).to eq(:header)
+      expect(parameter.required).to be(false)
+    end
+
+    it "defines an optional cookie parameter by default" do
+      endpoint = described_class.new
+
+      endpoint.cookie_param :session_id, type: :string
+
+      parameter = endpoint.parameters.parameters.first
+      expect(parameter.name).to eq(:session_id)
+      expect(parameter.in).to eq(:cookie)
+      expect(parameter.required).to be(false)
+    end
+
+    it "yields the created parameter for nested property definitions" do
+      endpoint = described_class.new
+
+      endpoint.query_param :filter, type: :object do |filter|
+        filter.property :active, type: :boolean
+      end
+
+      parameter = endpoint.parameters.parameters.first
+      expect(parameter.properties).to include(:active)
+    end
+  end
+
+  describe "#body" do
+    it "aliases request_body definition" do
+      endpoint = described_class.new
+
+      endpoint.body type: :object, description: "User data" do |body|
+        body.property :name, type: :string
+      end
+
+      expect(endpoint.request_body).to be_a(Raxon::OpenApi::RequestBody)
+      expect(endpoint.request_body.description).to eq("User data")
+      expect(endpoint.request_body.properties).to include(:name)
+    end
+
+    it "returns the request body when called without arguments" do
+      endpoint = described_class.new
+      endpoint.request_body type: :object
+
+      expect(endpoint.body).to eq(endpoint.request_body)
     end
   end
 
@@ -80,6 +234,73 @@ RSpec.describe Raxon::OpenApi::Endpoint do
 
       response = endpoint.responses[:unprocessable_entity]
       expect(response.description).to eq("Invalid request format")
+    end
+  end
+
+  describe "standard error response helpers" do
+    it "adds a validation error response" do
+      endpoint = described_class.new
+
+      result = endpoint.validation_error_response
+
+      response = endpoint.responses[400]
+      expect(result).to eq(response)
+      expect(response.description).to eq("Validation error")
+      expect(response.properties.keys).to contain_exactly(:error, :details)
+      expect(response.properties[:error].type).to eq("string")
+      expect(response.properties[:details].type).to eq("object")
+      expect(response.properties[:details].required).to be(false)
+    end
+
+    it "adds an unauthorized response" do
+      endpoint = described_class.new
+
+      response = endpoint.unauthorized_response
+
+      expect(endpoint.responses[401]).to eq(response)
+      expect(response.description).to eq("Unauthorized")
+      expect(response.properties.keys).to contain_exactly(:error)
+    end
+
+    it "adds a not found response" do
+      endpoint = described_class.new
+
+      response = endpoint.not_found_response
+
+      expect(endpoint.responses[404]).to eq(response)
+      expect(response.description).to eq("Not found")
+      expect(response.properties.keys).to contain_exactly(:error)
+    end
+
+    it "adds a generic error response with default status" do
+      endpoint = described_class.new
+
+      response = endpoint.error_response
+
+      expect(endpoint.responses[500]).to eq(response)
+      expect(response.description).to eq("Error")
+      expect(response.properties.keys).to contain_exactly(:error, :details)
+      expect(response.properties[:details].required).to be(false)
+    end
+
+    it "adds a generic error response with custom status and description" do
+      endpoint = described_class.new
+
+      response = endpoint.error_response 418, description: "Teapot error"
+
+      expect(endpoint.responses[418]).to eq(response)
+      expect(response.description).to eq("Teapot error")
+    end
+
+    it "allows customizing standard error response properties with a block" do
+      endpoint = described_class.new
+
+      response = endpoint.error_response 409 do |resp|
+        resp.property :code, type: :string, required: false
+      end
+
+      expect(response.properties).to include(:error, :details, :code)
+      expect(response.properties[:code].type).to eq("string")
     end
   end
 

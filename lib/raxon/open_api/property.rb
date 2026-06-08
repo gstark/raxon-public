@@ -57,6 +57,50 @@ module Raxon
       #   @return [Boolean] Whether the property can be null (default: false)
       option :nullable, default: proc { false }
 
+      # @!attribute [r] format
+      #   @return [String, Symbol, nil] OpenAPI string format
+      option :format, optional: true
+
+      # @!attribute [r] example
+      #   @return [Object, nil] OpenAPI example value
+      option :example, optional: true
+
+      # @!attribute [r] default
+      #   @return [Object, nil] OpenAPI default value
+      option :default, optional: true
+
+      # @!attribute [r] minimum
+      #   @return [Numeric, nil] Minimum numeric value
+      option :minimum, optional: true
+
+      # @!attribute [r] maximum
+      #   @return [Numeric, nil] Maximum numeric value
+      option :maximum, optional: true
+
+      # @!attribute [r] min_length
+      #   @return [Integer, nil] Minimum string length
+      option :min_length, optional: true
+
+      # @!attribute [r] max_length
+      #   @return [Integer, nil] Maximum string length
+      option :max_length, optional: true
+
+      # @!attribute [r] pattern
+      #   @return [String, Regexp, nil] String pattern constraint
+      option :pattern, optional: true
+
+      # @!attribute [r] min_items
+      #   @return [Integer, nil] Minimum array item count
+      option :min_items, optional: true
+
+      # @!attribute [r] max_items
+      #   @return [Integer, nil] Maximum array item count
+      option :max_items, optional: true
+
+      # @!attribute [r] unique_items
+      #   @return [Boolean, nil] Whether array items must be unique
+      option :unique_items, optional: true
+
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for object types
       option :properties, default: proc { {} }

@@ -25,6 +25,10 @@ module Raxon
       @endpoint = endpoint
       @validation_errors = nil
       @validated_params = nil
+      @path_params = nil
+      @query_params = nil
+      @body_params = nil
+      @form_params = nil
       @json_parse_error = false
       @endpoint_contexts = {}
     end
@@ -42,6 +46,56 @@ module Raxon
       @endpoint_contexts[endpoint] ||= endpoint.create_context_instance
     end
 
+    # Get path parameters extracted by the router from dynamic route segments.
+    #
+    # @return [Hash] Path parameters with symbol keys
+    def path_params
+      @path_params ||= (@rack_request.env["router.params"] || {}).symbolize_keys
+    end
+
+    # Get query string parameters only.
+    #
+    # @return [Hash] Query parameters with symbol keys
+    def query_params
+      @query_params ||= @rack_request.GET.symbolize_keys
+    end
+
+    # Get JSON request body parameters only.
+    #
+    # Returns an empty hash for non-JSON requests, empty bodies, JSON arrays,
+    # and invalid JSON. Invalid JSON sets #json_parse_error to true, matching
+    # #params behavior.
+    #
+    # @return [Hash] JSON body object parameters with symbol keys
+    def body_params
+      return @body_params if @body_params
+
+      parsed_body = parse_json_body
+      @body_params = parsed_body.is_a?(Hash) ? parsed_body : {}
+    end
+
+    # Get form request body parameters only.
+    #
+    # JSON requests intentionally return an empty hash. For URL-encoded or
+    # multipart form requests, Rack::Request#POST provides body parameters
+    # without query string parameters.
+    #
+    # @return [Hash] Form parameters with symbol keys
+    def form_params
+      return @form_params if @form_params
+
+      @form_params = if json?
+        {}
+      else
+        post_params = @rack_request.POST.symbolize_keys
+        if post_params.empty? && form_content_type?
+          @rack_request.params.symbolize_keys.except(*query_params.keys)
+        else
+          post_params
+        end
+      end
+    end
+
     # Get request parameters with validation and type coercion.
     #
     # If an endpoint with a request_schema is available, this method will:
@@ -57,9 +111,9 @@ module Raxon
     def params
       return @validated_params if @validated_params
 
-      # Parse JSON body FIRST before accessing rack_request.params
-      # (accessing params can consume the body stream)
-      json_body = parse_json_body
+      # Parse JSON body FIRST before accessing form params
+      # (accessing form params can consume the body stream)
+      json_body = body_params
 
       # Handle JSON parsing error
       return @validated_params if @json_parse_error
@@ -96,29 +150,24 @@ module Raxon
     # Assemble all request parameters from various sources.
     #
     # Merges parameters from:
-    # 1. Rack query/form parameters
-    # 2. JSON body (if present)
-    # 3. Router path parameters (if present)
+    # 1. Query parameters
+    # 2. Form parameters
+    # 3. JSON body parameters
+    # 4. Router path parameters
     #
-    # @param json_body [Hash, nil] Parsed JSON body
+    # Later sources take precedence over earlier sources to preserve the
+    # historical merged #params behavior where body values override query/form
+    # values and path parameters override all client-supplied values.
+    #
+    # @param json_body [Hash] Parsed JSON body params
     # @return [Hash] Merged parameters
     #
     # @private
     def assemble_params(json_body)
-      # Start with base params from Rack (query and form params)
-      base_params = @rack_request.params.symbolize_keys
-
-      # Merge JSON body if present
-      if json_body.is_a?(Hash)
-        base_params = base_params.merge(json_body)
-      end
-
-      # Merge path parameters from router (if present in env)
-      if @rack_request.env["router.params"]
-        base_params = base_params.merge(@rack_request.env["router.params"].symbolize_keys)
-      end
-
-      base_params
+      query_params
+        .merge(form_params)
+        .merge(json_body)
+        .merge(path_params)
     end
 
     # Validate assembled parameters and store the result.
@@ -462,6 +511,15 @@ module Raxon
     end
 
     private
+
+    # Determine whether the request content type is a form submission.
+    #
+    # @return [Boolean] true for URL-encoded or multipart form requests
+    #
+    # @private
+    def form_content_type?
+      content_type&.include?("application/x-www-form-urlencoded") || content_type&.include?("multipart/form-data")
+    end
 
     # Extract the domain portion from a host string.
     #

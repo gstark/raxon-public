@@ -82,6 +82,32 @@ RSpec.describe "Path Parameters Integration" do
     expect(request.params[:project_id]).to eq("website-redesign")
   end
 
+  it "exposes path parameters separately from query parameters" do
+    file_path = "routes/api/v1/users/$id/get.rb"
+
+    Raxon::RouteLoader.register(file_path) do |endpoint|
+      endpoint.handler do |request, response|
+        response.code = :ok
+        response.body = {
+          path: request.path_params,
+          query: request.query_params,
+          merged: request.params
+        }
+      end
+    end
+
+    status, _headers, body = Raxon::Router.new.call(
+      Rack::MockRequest.env_for("/api/v1/users/456?include=posts", method: "GET")
+    )
+
+    expect(status).to eq(200)
+    expect(JSON.parse(body.first)).to eq(
+      "path" => {"id" => "456"},
+      "query" => {"include" => "posts"},
+      "merged" => {"include" => "posts", "id" => "456"}
+    )
+  end
+
   it "merges path parameters with query parameters" do
     file_path = "routes/api/v1/users/$id/get.rb"
 

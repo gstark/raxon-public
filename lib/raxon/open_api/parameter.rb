@@ -48,6 +48,18 @@ module Raxon
       #   @return [Boolean] Whether the parameter can be null (default: false)
       option :nullable, default: proc { false }
 
+      option :format, optional: true
+      option :example, optional: true
+      option :default, optional: true
+      option :minimum, optional: true
+      option :maximum, optional: true
+      option :min_length, optional: true
+      option :max_length, optional: true
+      option :pattern, optional: true
+      option :min_items, optional: true
+      option :max_items, optional: true
+      option :unique_items, optional: true
+
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for body/object parameters
       option :properties, default: proc { {} }

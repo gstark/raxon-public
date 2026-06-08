@@ -227,7 +227,7 @@ module Raxon
       def configure_endpoint(endpoint, file_path, path, method)
         endpoint.path(path)
         endpoint.method = method
-        endpoint.operation(method == "all" ? ACTUAL_HTTP_METHODS.map(&:to_sym) : method.to_sym)
+        endpoint.operation((method == "all") ? ACTUAL_HTTP_METHODS.map(&:to_sym) : method.to_sym)
         endpoint.route_file_path = file_path
       end
 

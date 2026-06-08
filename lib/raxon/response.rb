@@ -148,6 +148,66 @@ module Raxon
       @custom_body
     end
 
+    # Set a 200 OK response with a JSON body.
+    #
+    # @param value [Hash, Array, String, Object, nil] Optional positional body
+    # @param kwargs [Hash] Optional keyword body
+    # @return [Response] self for chaining
+    #
+    # @example
+    #   response.ok(success: true)
+    #   response.ok({ users: [] })
+    def ok(value = nil, **kwargs)
+      respond_with(:ok, response_body_from(value, kwargs))
+    end
+
+    # Set a 201 Created response with a JSON body.
+    #
+    # @param value [Hash, Array, String, Object, nil] Optional positional body
+    # @param kwargs [Hash] Optional keyword body
+    # @return [Response] self for chaining
+    #
+    # @example
+    #   response.created(user)
+    #   response.created(id: 123)
+    def created(value = nil, **kwargs)
+      respond_with(:created, response_body_from(value, kwargs))
+    end
+
+    # Set a 204 No Content response with no body.
+    #
+    # @return [Response] self for chaining
+    #
+    # @example
+    #   response.no_content
+    def no_content
+      respond_with(:no_content, nil)
+    end
+
+    # Set a 404 Not Found response.
+    #
+    # @param value [Hash, Array, String, Object, nil] Optional positional body
+    # @param kwargs [Hash] Optional keyword body
+    # @return [Response] self for chaining
+    #
+    # @example
+    #   response.not_found(error: "User not found")
+    def not_found(value = nil, **kwargs)
+      respond_with(:not_found, response_body_from(value, kwargs, default: {error: "Not Found"}))
+    end
+
+    # Set an error response with a standard `{ error: message }` body.
+    #
+    # @param message [String] Error message
+    # @param status [Symbol, Integer] HTTP status code (default: :bad_request)
+    # @return [Response] self for chaining
+    #
+    # @example
+    #   response.error("Unauthorized", status: :unauthorized)
+    def error(message, status: :bad_request)
+      respond_with(status, {error: message})
+    end
+
     # Set the response body to HTML content and update content-type header.
     # This is a convenience method that sets both the body and content-type in one call.
     #
@@ -273,6 +333,21 @@ module Raxon
     end
 
     private
+
+    def respond_with(status, value)
+      self.code = status
+      self.body = value
+      self
+    end
+
+    def response_body_from(value, kwargs, default: {})
+      return value unless value.nil?
+      return kwargs unless kwargs.empty?
+
+      default
+    end
+
+    public
 
     # Write directly to the Rack response body.
     # Delegates to Rack::Response#write

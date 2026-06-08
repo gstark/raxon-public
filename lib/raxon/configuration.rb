@@ -1,9 +1,9 @@
 module Raxon
   # Configuration for Raxon applications
   class Configuration
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :on_error, :helpers_path, :root, :rails_compatible_instrumentation
-    alias routes_directories routes_directory
-    alias routes_directories= routes_directory=
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details
+    alias_method :routes_directories, :routes_directory
+    alias_method :routes_directories=, :routes_directory=
 
     def initialize
       @routes_directory = ENV.fetch("RAXON_ROUTES_DIR", "routes")
@@ -14,11 +14,19 @@ module Raxon
       @helpers_path = nil
       @root = nil
       @rails_compatible_instrumentation = false
+      @response_validation = production_environment? ? :log : :error_response
+      @expose_validation_details = !production_environment?
       @before_blocks = []
       @after_blocks = []
       @around_blocks = []
       @exception_handlers = {}
     end
+
+    def production_environment?
+      (ENV["RAXON_ENV"] || ENV["RACK_ENV"] || "development") == "production"
+    end
+
+    private :production_environment?
 
     # Register a global before block to be executed before every request.
     #

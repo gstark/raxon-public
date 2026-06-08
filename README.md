@@ -37,21 +37,30 @@ bundle install
 Create a route file at `routes/api/v1/ping/get.rb`:
 
 ```ruby
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
-  endpoint.description "Health check endpoint"
+Raxon.route do
+  description "Health check endpoint"
 
-  endpoint.response 200, type: :object do |response|
-    response.property :success, type: :boolean, description: "Always true"
-    response.property :timestamp, type: :string, description: "Current server time"
+  response 200, type: :object do
+    property :success, type: :boolean, description: "Always true"
+    property :timestamp, type: :string, description: "Current server time"
   end
 
-  endpoint.handler do |request, response|
+  handler do |_request, response|
     response.code = :ok
     response.body = {
       success: true,
       timestamp: Time.now.iso8601
     }
   end
+end
+```
+
+The existing explicit interface remains supported for compatibility:
+
+```ruby
+Raxon::RouteLoader.register(__FILE__) do |endpoint|
+  endpoint.description "Health check endpoint"
+  endpoint.handler { |_request, response| response.body = { success: true } }
 end
 ```
 
@@ -105,11 +114,11 @@ The `$param` syntax is also supported for backwards compatibility, but dunder st
 routes/api/v1/users/$id/get.rb           → GET /api/v1/users/{id}
 ```
 
-Path parameters are automatically extracted and available in `request.params`:
+Path parameters are automatically extracted and available in `request.path_params` and the merged `request.params` convenience hash:
 
 ```ruby
 endpoint.handler do |request, response|
-  user_id = request.params[:id]  # Extracted from URL path
+  user_id = request.path_params[:id]  # Extracted from URL path
   response.body = { user_id: user_id }
 end
 ```
@@ -122,14 +131,21 @@ Access request data through the `request` object:
 
 ```ruby
 endpoint.handler do |request, response|
-  # Query parameters
-  page = request.params[:page]
+  # Query string parameters only
+  page = request.query_params[:page]
 
-  # Path parameters (from routing)
-  user_id = request.params[:id]
+  # Path parameters from routing only
+  user_id = request.path_params[:id]
 
-  # JSON body (automatically parsed)
-  name = request.params[:name]
+  # JSON body object parameters only
+  name = request.body_params[:name]
+
+  # URL-encoded or multipart form body parameters only
+  photo = request.form_params[:photo]
+
+  # Merged convenience hash remains available and is validated/coerced
+  # when endpoint parameter or request body schemas are configured.
+  params = request.params
 
   # Request metadata
   ip_address = request.ip
@@ -146,8 +162,15 @@ Build responses using the clean DSL:
 
 ```ruby
 endpoint.handler do |request, response|
+  # Convenience response helpers
+  response.ok(success: true)
+  response.created(user)
+  response.no_content
+  response.not_found(error: "User not found")
+  response.error("Unauthorized", status: :unauthorized)
+
   # Set status code (symbol or integer)
-  response.code = :created  # or response.code 201
+  response.code = :created  # or response.code = 201
 
   # Set body (automatically serialized to JSON)
   response.body = { id: 123, name: "John" }
@@ -519,12 +542,12 @@ Raxon supports ERB-templated HTML responses alongside JSON:
 
 ```ruby
 # routes/dashboard/get.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
-  endpoint.description "Dashboard page"
+Raxon.route do
+  description "Dashboard page"
 
-  endpoint.handler do |request, response|
+  handler do |_request, response|
     users = fetch_users
-    response.render_html(users: users)
+    response.html_body = response.html(users: users)
   end
 end
 ```
@@ -552,7 +575,7 @@ Create a template file with the same path but `.html.erb` extension:
 **HTML rendering features:**
 
 - Templates are pre-compiled at load time for performance
-- Variables passed to `render_html` are available in templates
+- Locals passed to `response.html(...)` are available in templates
 - Templates are located alongside route files with `.html.erb` extension
 - Automatically sets `Content-Type: text/html`
 - ERB syntax supports all standard Ruby code
@@ -569,8 +592,8 @@ end
 
 # HTML page
 # routes/dashboard/get.rb
-endpoint.handler do |request, response|
-  response.render_html(users: fetch_users)
+endpoint.handler do |_request, response|
+  response.html_body = response.html(users: fetch_users)
 end
 ```
 
@@ -579,6 +602,17 @@ end
 ### Request Parameter Validation
 
 Define parameters with automatic validation and type coercion:
+
+```ruby
+endpoint.path_param :id, type: :string, description: "User ID"
+endpoint.query_param :email, type: :string, required: true
+endpoint.query_param :age, type: :number
+endpoint.query_param :role, type: :string
+endpoint.header_param :authorization, type: :string, required: true
+endpoint.cookie_param :session_id, type: :string
+```
+
+The existing explicit parameter interface remains supported:
 
 ```ruby
 endpoint.parameters do |params|
@@ -605,9 +639,14 @@ Invalid requests automatically return 400 Bad Request with error details:
 Define request body schemas with nested validation:
 
 ```ruby
-endpoint.request_body type: :object, description: "User data", required: true do |body|
-  body.property :name, type: :string, required: true
-  body.property :email, type: :string, required: true
+endpoint.body type: :object, description: "User data", required: true do |body|
+  body.property :name, type: :string, required: true, min_length: 2, max_length: 100
+  body.property :email, type: :string, required: true, format: :email, pattern: "^[^@]+@[^@]+$", example: "user@example.com"
+  body.property :age, type: :integer, required: false, minimum: 0, maximum: 130
+  body.property :created_at, type: :datetime, required: false  # OpenAPI: string/date-time
+  body.property :birthday, type: :date, required: false       # OpenAPI: string/date
+  body.property :account_id, type: :uuid, required: false     # OpenAPI: string/uuid
+  body.property :tags, type: :array, of: :string, required: false, min_items: 1, max_items: 10, unique_items: true
   body.property :profile, type: :object, required: false do |profile|
     profile.property :bio, type: :string
     profile.property :website, type: :string
@@ -620,7 +659,7 @@ end
 Handle file uploads by declaring properties with `type: :file`. Raxon automatically wraps Rack multipart hashes into `Raxon::UploadedFile` objects:
 
 ```ruby
-endpoint.request_body type: :multipart do |body|
+endpoint.body type: :multipart do |body|
   body.property :photo, type: :file, required: true
   body.property :caption, type: :string, required: false
 end
@@ -656,6 +695,33 @@ endpoint.response 404, type: :object do |response|
 end
 ```
 
+Standard error response helpers are available for common API responses:
+
+```ruby
+endpoint.validation_error_response
+endpoint.unauthorized_response
+endpoint.not_found_response
+endpoint.error_response 500
+```
+
+These generate object response schemas with a required `error` string and, where appropriate, optional `details` object.
+
+Response validation failures are configurable:
+
+```ruby
+Raxon.configure do |config|
+  config.response_validation = :error_response # default outside production
+  config.response_validation = :log            # default in production
+  config.response_validation = :raise
+  config.response_validation = false
+  config.expose_validation_details = false     # default in production
+end
+
+# Per endpoint override
+endpoint.validate_response false
+endpoint.validate_response true
+```
+
 ## OpenAPI Documentation
 
 ### Automatic Generation
@@ -670,6 +736,42 @@ This creates:
 
 - `doc/apidoc/api.json` - OpenAPI specification
 - `doc/apidoc/api.html` - Swagger UI documentation
+
+### Operation Metadata
+
+Add common OpenAPI operation metadata alongside your route definition:
+
+```ruby
+endpoint.summary "List users"
+endpoint.description "Fetches users visible to the current API key"
+endpoint.operation_id "listUsers"
+endpoint.tags "Users", "Admin"
+endpoint.deprecated false
+endpoint.security :api_key
+endpoint.security :oauth2, scopes: ["users:read"]
+```
+
+The concise `Raxon.route` DSL supports the same methods without the `endpoint.` prefix.
+
+### Specification Isolation
+
+The global `Raxon::OpenApi::DSL` remains available for compatibility and delegates to a default specification object. For tests, engines, or multiple APIs in one process, create isolated specifications:
+
+```ruby
+spec = Raxon::OpenApi::Specification.new
+spec.component(:User, type: :object)
+spec.endpoint do |endpoint|
+  endpoint.path "/users"
+  endpoint.operation :get
+end
+spec.to_open_api
+```
+
+Reset the compatible global DSL state when needed:
+
+```ruby
+Raxon::OpenApi::DSL.reset!
+```
 
 ### Component Schemas
 

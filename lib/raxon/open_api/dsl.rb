@@ -31,9 +31,85 @@ module Raxon
     # @example Resource-based component generation
     #   OpenApi::DSL.from_resource(:User, UserResource, User)
     #
+    class Specification
+      attr_reader :endpoints, :components
+
+      def initialize
+        @endpoints = []
+        @components = []
+      end
+
+      def reset!
+        @endpoints.clear
+        @components.clear
+      end
+
+      def component(name, options, &block)
+        component = Component.new(name, **options)
+        @components << component
+        yield component if block_given?
+        component
+      end
+
+      def endpoint
+        endpoint = Endpoint.new
+        @endpoints << endpoint
+        yield endpoint if block_given?
+        endpoint
+      end
+
+      def from_resource(name, resource, active_record_class, &block)
+        component(name, type: :object) do |component|
+          yield component if block_given?
+
+          resource._attributes.each do |attribute_name, definition|
+            next if component&.properties&.key?(attribute_name.to_sym)
+
+            property = component&.properties&.[](attribute_name.to_sym)
+
+            if definition.is_a?(Alba::Association)
+              DSL.build_association_property(component, attribute_name, definition, property)
+            elsif definition.is_a?(Symbol)
+              DSL.build_database_property(component, attribute_name, active_record_class)
+            end
+          end
+        end
+      end
+
+      def to_open_api
+        DSL.with_components(@components) do
+          data = {
+            openapi: "3.0.0",
+            info: DSL.build_api_info,
+            paths: DSL.build_paths(@endpoints),
+            components: DSL.build_components(@components)
+          }
+
+          DSL.deep_transform_keys(data, &:to_s)
+        end
+      end
+    end
+
     class DSL
-      @@endpoints = []
-      @@components = []
+      class << self
+        attr_writer :default_spec
+      end
+
+      def self.default_spec
+        @default_spec ||= Specification.new
+      end
+
+      def self.reset!
+        @default_spec = Specification.new
+      end
+
+      def self.endpoints
+        default_spec.endpoints
+      end
+
+      def self.components
+        default_spec.components
+      end
 
       # Process and normalize a type specification.
       #
@@ -54,6 +130,8 @@ module Raxon
           type
         when :number
           "number"
+        when :integer
+          "integer"
         when :string
           "string"
         when :boolean
@@ -98,22 +176,7 @@ module Raxon
       #   end
       #
       def self.from_resource(name, resource, active_record_class, &block)
-        component(name, type: :object) do |component|
-          yield component if block_given?
-
-          resource._attributes.each do |attribute_name, definition|
-            # skip if we've already defined the property
-            next if component&.properties&.key?(attribute_name.to_sym)
-
-            property = component&.properties&.[](attribute_name.to_sym)
-
-            if definition.is_a?(Alba::Association)
-              build_association_property(component, attribute_name, definition, property)
-            elsif definition.is_a?(Symbol)
-              build_database_property(component, attribute_name, active_record_class)
-            end
-          end
-        end
+        default_spec.from_resource(name, resource, active_record_class, &block)
       end
 
       # Build a property from an Alba association.
@@ -185,14 +248,18 @@ module Raxon
         base_options = {description: description, nullable: is_nullable, allowable_values: allowable_values}
 
         case sql_type
-        when "integer", "bigint", "double precision", /numeric\(.*\)/
+        when "integer", "bigint"
+          integer_property_options(is_array_column, base_options)
+        when "double precision", /numeric\(.*\)/
           numeric_property_options(is_array_column, base_options)
         when "string", /character varying/, "text"
           string_property_options(is_array_column, base_options)
         when "boolean"
           boolean_property_options(is_array_column, base_options)
-        when "timestamp(6) without time zone", "date"
+        when "timestamp(6) without time zone"
           datetime_property_options(is_array_column, base_options)
+        when "date"
+          date_property_options(is_array_column, base_options)
         when "jsonb"
           {type: :object, **base_options}
         else
@@ -212,6 +279,21 @@ module Raxon
           {type: :array, of: :number, **base_options}
         else
           {type: :number, **base_options}
+        end
+      end
+
+      # Build property options for integer types.
+      #
+      # @param is_array_column [Boolean] Whether the column is an array type
+      # @param base_options [Hash] Base property options
+      # @return [Hash] Property options for integer type
+      #
+      # @private
+      def self.integer_property_options(is_array_column, base_options)
+        if is_array_column
+          {type: :array, of: :integer, **base_options}
+        else
+          {type: :integer, **base_options}
         end
       end
 
@@ -254,9 +336,24 @@ module Raxon
       # @private
       def self.datetime_property_options(is_array_column, base_options)
         if is_array_column
-          {type: "Dayjs", of: :datetime, **base_options}
+          {type: :array, of: :datetime, **base_options}
         else
-          {type: "Dayjs", **base_options}
+          {type: :datetime, format: :date_time, **base_options}
+        end
+      end
+
+      # Build property options for date types.
+      #
+      # @param is_array_column [Boolean] Whether the column is an array type
+      # @param base_options [Hash] Base property options
+      # @return [Hash] Property options for date type
+      #
+      # @private
+      def self.date_property_options(is_array_column, base_options)
+        if is_array_column
+          {type: :array, of: :date, **base_options}
+        else
+          {type: :date, format: :date, **base_options}
         end
       end
 
@@ -276,11 +373,7 @@ module Raxon
       #   end
       #
       def self.component(name, options, &block)
-        component = Component.new(name, **options)
-
-        @@components << component
-
-        yield component if block_given?
+        default_spec.component(name, options, &block)
       end
 
       # Define an API endpoint with operations and responses.
@@ -294,12 +387,8 @@ module Raxon
       #     e.response 200, type: :array, of: :User
       #   end
       #
-      def self.endpoint
-        endpoint = Endpoint.new
-
-        @@endpoints << endpoint
-
-        yield endpoint if block_given?
+      def self.endpoint(&block)
+        default_spec.endpoint(&block)
       end
 
       # Recursively transform all keys in a nested hash/array structure.
@@ -332,7 +421,7 @@ module Raxon
       #
       def self.property_to_items_type(property)
         item_type = property.as || property.of
-        @@components.map(&:name).include?(item_type.to_s) ? {"$ref": "#/components/schemas/#{item_type}"} : {type: item_type.to_s}
+        active_components.map(&:name).include?(item_type.to_s) ? {"$ref": "#/components/schemas/#{item_type}"} : schema_for_type(item_type)
       end
 
       # Convert a property to OpenAPI JSON schema format.
@@ -389,9 +478,10 @@ module Raxon
       # @private
       def self.array_property_definition(property)
         {
-          type: property.type,
+          type: openapi_schema_type(property),
           description: property.description,
           **merge_nullable(property),
+          **schema_metadata(property),
           items: array_items_definition(property)
         }
       end
@@ -421,7 +511,8 @@ module Raxon
           type: "string",
           format: "binary",
           description: property.description,
-          **merge_nullable(property)
+          **merge_nullable(property),
+          **schema_metadata(property).except(:format)
         }
       end
 
@@ -433,9 +524,10 @@ module Raxon
       # @private
       def self.union_type_definition(property)
         {
-          anyOf: property.type.map { |t| {type: process_type(t)} },
+          anyOf: property.type.map { |t| schema_for_type(t) },
           description: property.description,
-          **merge_enum_and_nullable(property)
+          **merge_enum_and_nullable(property),
+          **schema_metadata(property)
         }
       end
 
@@ -447,11 +539,93 @@ module Raxon
       # @private
       def self.standard_property_definition(property)
         {
-          type: property.type,
+          type: openapi_schema_type(property),
           description: property.description,
           **merge_enum_and_nullable(property),
+          **schema_metadata(property),
           **(property.properties ? properties_to_json(property.properties) : {})
         }
+      end
+
+      # Return the OpenAPI schema for a raw type value.
+      #
+      # @param raw_type [Symbol, String]
+      # @return [Hash]
+      #
+      # @private
+      def self.schema_for_type(raw_type)
+        processed_type = process_type(raw_type)
+        format = standard_format_for_type(processed_type)
+        return {type: "string", format: format} if format
+
+        {type: processed_type.to_s}
+      end
+
+      # Return the OpenAPI type for a property-like object.
+      #
+      # @param property [Property, Parameter, Component, Response] The property object
+      # @return [String]
+      #
+      # @private
+      def self.openapi_schema_type(property)
+        format = standard_format_for_type(property.type)
+        format ? "string" : property.type
+      end
+
+      # Return a standard OpenAPI string format for convenience date/email/UUID types.
+      #
+      # @param type [String, Symbol]
+      # @return [String, nil]
+      #
+      # @private
+      def self.standard_format_for_type(type)
+        case type.to_s
+        when "datetime", "date_time", "Dayjs"
+          "date-time"
+        when "date"
+          "date"
+        when "uuid"
+          "uuid"
+        when "email"
+          "email"
+        end
+      end
+
+      # Extract OpenAPI schema metadata fields from a property-like object.
+      #
+      # @param property [Property, Parameter, Component, Response] The property object
+      # @return [Hash] OpenAPI schema metadata
+      #
+      # @private
+      def self.schema_metadata(property)
+        metadata = {}
+        inferred_format = standard_format_for_type(property.type)
+        explicit_format = normalize_format(property.format) if schema_metadata_present?(property, :format)
+        metadata[:format] = explicit_format || inferred_format if explicit_format || inferred_format
+        metadata[:example] = property.example if schema_metadata_present?(property, :example)
+        metadata[:default] = property.default if schema_metadata_present?(property, :default)
+        metadata[:minimum] = property.minimum if schema_metadata_present?(property, :minimum)
+        metadata[:maximum] = property.maximum if schema_metadata_present?(property, :maximum)
+        metadata[:minLength] = property.min_length if schema_metadata_present?(property, :min_length)
+        metadata[:maxLength] = property.max_length if schema_metadata_present?(property, :max_length)
+        metadata[:pattern] = property.pattern.to_s if schema_metadata_present?(property, :pattern)
+        metadata[:minItems] = property.min_items if schema_metadata_present?(property, :min_items)
+        metadata[:maxItems] = property.max_items if schema_metadata_present?(property, :max_items)
+        metadata[:uniqueItems] = property.unique_items if schema_metadata_present?(property, :unique_items)
+        metadata
+      end
+
+      def self.schema_metadata_present?(property, attribute)
+        property.respond_to?(attribute) && !property.public_send(attribute).nil?
+      end
+
+      def self.normalize_format(format)
+        case format.to_s
+        when "date_time", "datetime"
+          "date-time"
+        else
+          format.to_s
+        end
       end
 
       # Merge nullable attribute into a hash if the property is nullable.
@@ -507,14 +681,7 @@ module Raxon
       #   Raxon::OpenApi::DSL.to_open_api  # => {openapi: "3.0.0", info: {...}, paths: {...}, components: {...}}
       #
       def self.to_open_api
-        data = {
-          openapi: "3.0.0",
-          info: build_api_info,
-          paths: build_paths,
-          components: build_components
-        }
-
-        data.deep_transform_keys(&:to_s)
+        default_spec.to_open_api
       end
 
       # Build the API info section of the OpenAPI specification.
@@ -535,8 +702,8 @@ module Raxon
       # @return [Hash] Paths mapping to endpoint operations
       #
       # @private
-      def self.build_paths
-        @@endpoints.each_with_object({}) do |endpoint, paths|
+      def self.build_paths(endpoints = default_spec.endpoints)
+        endpoints.each_with_object({}) do |endpoint, paths|
           paths[endpoint.path] ||= {}
           endpoint.operations.each do |operation|
             paths[endpoint.path][operation] = build_operation_hash(endpoint)
@@ -556,11 +723,30 @@ module Raxon
           responses: build_responses(endpoint)
         }
 
+        operation_hash[:summary] = endpoint.summary if endpoint.summary
+        operation_hash[:description] = endpoint.description if endpoint.description
+        operation_hash[:operationId] = endpoint.operation_id if endpoint.operation_id
+        operation_hash[:tags] = endpoint.tags if endpoint.tags.any?
+        operation_hash[:deprecated] = true if endpoint.deprecated
+        operation_hash[:security] = stringify_security_requirements(endpoint.security) if endpoint.security
+
         if endpoint.request_body
           operation_hash[:requestBody] = build_request_body(endpoint.request_body)
         end
 
         operation_hash
+      end
+
+      # Convert OpenAPI security requirement keys to strings for JSON output.
+      #
+      # @param security [Array<Hash>, Hash]
+      # @return [Array<Hash>]
+      #
+      # @private
+      def self.stringify_security_requirements(security)
+        Array(security).map do |requirement|
+          requirement.transform_keys(&:to_s)
+        end
       end
 
       # Build the parameters list for an endpoint.
@@ -653,7 +839,7 @@ module Raxon
       #
       # @private
       def self.request_body_media_type(request_body)
-        request_body.type == "multipart" ? "multipart/form-data" : "application/json"
+        (request_body.type == "multipart") ? "multipart/form-data" : "application/json"
       end
 
       # Build the components section of the OpenAPI specification.
@@ -661,10 +847,24 @@ module Raxon
       # @return [Hash] Components hash with schemas
       #
       # @private
-      def self.build_components
-        {
-          schemas: @@components.to_h { |component| property_to_json(component.name, component) }
-        }
+      def self.build_components(components = default_spec.components)
+        with_components(components) do
+          {
+            schemas: components.to_h { |component| property_to_json(component.name, component) }
+          }
+        end
+      end
+
+      def self.with_components(components)
+        previous_components = Thread.current[:raxon_openapi_components]
+        Thread.current[:raxon_openapi_components] = components
+        yield
+      ensure
+        Thread.current[:raxon_openapi_components] = previous_components
+      end
+
+      def self.active_components
+        Thread.current[:raxon_openapi_components] || default_spec.components
       end
     end
   end

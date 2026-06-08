@@ -62,8 +62,11 @@ module Raxon
       end
 
       def validate_array(property, value)
-        return {} unless value.is_a?(Array)
-        return {} unless property.properties.any? && (property.of.nil? || property.of.to_s == "object")
+        value_is_array = value.is_a?(Array)
+        return {} unless value_is_array
+
+        validates_object_items = property.properties.any? && (property.of.nil? || property.of.to_s == "object")
+        return {} unless validates_object_items
 
         item_errors = {}
         value.each_with_index do |item, index|

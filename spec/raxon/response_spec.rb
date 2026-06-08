@@ -171,6 +171,126 @@ RSpec.describe Raxon::Response do
     end
   end
 
+  describe "convenience response methods" do
+    describe "#ok" do
+      it "sets a 200 OK response with keyword body" do
+        response = Raxon::Response.new
+
+        result = response.ok(success: true)
+
+        expect(result).to eq(response)
+        expect(response.status_code).to eq(200)
+        expect(response.body).to eq(success: true)
+      end
+
+      it "sets a 200 OK response with positional body" do
+        body = {users: []}
+        response = Raxon::Response.new
+
+        response.ok(body)
+
+        expect(response.status_code).to eq(200)
+        expect(response.body).to eq(body)
+      end
+    end
+
+    describe "#created" do
+      it "sets a 201 Created response with resource body" do
+        user = {id: 1, name: "Ada"}
+        response = Raxon::Response.new
+
+        result = response.created(user)
+
+        expect(result).to eq(response)
+        expect(response.status_code).to eq(201)
+        expect(response.body).to eq(user)
+      end
+
+      it "sets a 201 Created response with keyword body" do
+        response = Raxon::Response.new
+
+        response.created(id: 1, name: "Ada")
+
+        expect(response.status_code).to eq(201)
+        expect(response.body).to eq(id: 1, name: "Ada")
+      end
+    end
+
+    describe "#no_content" do
+      it "sets a 204 No Content response with nil body" do
+        response = Raxon::Response.new
+        response.body = {previous: "body"}
+
+        result = response.no_content
+
+        expect(result).to eq(response)
+        expect(response.status_code).to eq(204)
+        expect(response.body).to be_nil
+      end
+
+      it "renders an empty rack body" do
+        response = Raxon::Response.new
+
+        response.no_content
+        status, _headers, body = response.to_rack
+
+        expect(status).to eq(204)
+        expect(body).to eq([])
+      end
+    end
+
+    describe "#not_found" do
+      it "sets a 404 Not Found response with keyword body" do
+        response = Raxon::Response.new
+
+        result = response.not_found(error: "User not found")
+
+        expect(result).to eq(response)
+        expect(response.status_code).to eq(404)
+        expect(response.body).to eq(error: "User not found")
+      end
+
+      it "sets a default 404 error body when no body is provided" do
+        response = Raxon::Response.new
+
+        response.not_found
+
+        expect(response.status_code).to eq(404)
+        expect(response.body).to eq(error: "Not Found")
+      end
+    end
+
+    describe "#error" do
+      it "sets an error response with message and status symbol" do
+        response = Raxon::Response.new
+
+        result = response.error("Unauthorized", status: :unauthorized)
+
+        expect(result).to eq(response)
+        expect(response.status_code).to eq(401)
+        expect(response.body).to eq(error: "Unauthorized")
+      end
+
+      it "defaults to 400 Bad Request" do
+        response = Raxon::Response.new
+
+        response.error("Invalid request")
+
+        expect(response.status_code).to eq(400)
+        expect(response.body).to eq(error: "Invalid request")
+      end
+
+      it "accepts numeric status codes" do
+        response = Raxon::Response.new
+
+        response.error("Conflict", status: 409)
+
+        expect(response.status_code).to eq(409)
+        expect(response.body).to eq(error: "Conflict")
+      end
+    end
+  end
+
   describe "#html_body=" do
     it "sets HTML body and content-type" do
       response = Raxon::Response.new
@@ -381,12 +501,12 @@ RSpec.describe Raxon::Response do
     end
   end
 
-  describe "private methods" do
+  describe "public header and Rack response helpers" do
     describe "#header" do
       it "sets response header" do
         response = Raxon::Response.new
 
-        response.send(:header, "X-Custom-Header", "value")
+        response.header "X-Custom-Header", "value"
 
         _status, headers, _body = response.to_rack
         expect(headers["X-Custom-Header"]).to eq("value")
@@ -397,7 +517,7 @@ RSpec.describe Raxon::Response do
       it "returns response headers" do
         response = Raxon::Response.new
 
-        headers = response.send(:headers)
+        headers = response.headers
 
         expect(headers).to be_a(Hash)
         expect(headers["content-type"]).to eq("application/json")
@@ -408,8 +528,8 @@ RSpec.describe Raxon::Response do
       it "writes to response body" do
         response = Raxon::Response.new
 
-        response.send(:write, "Hello ")
-        response.send(:write, "World")
+        response.write "Hello "
+        response.write "World"
 
         _status, _headers, body = response.to_rack
         # When body is written directly, it creates an array with each write
@@ -421,7 +541,7 @@ RSpec.describe Raxon::Response do
       it "sets a cookie" do
         response = Raxon::Response.new
 
-        response.send(:set_cookie, "session", value: "abc123", path: "/")
+        response.set_cookie "session", value: "abc123", path: "/"
 
         _status, headers, _body = response.to_rack
         expect(headers["set-cookie"]).to include("session=abc123")
@@ -432,8 +552,8 @@ RSpec.describe Raxon::Response do
       it "deletes a cookie" do
         response = Raxon::Response.new
 
-        response.send(:set_cookie, "session", value: "abc123")
-        response.send(:delete_cookie, "session")
+        response.set_cookie "session", value: "abc123"
+        response.delete_cookie "session"
 
         _status, headers, _body = response.to_rack
         # Rack returns an array of set-cookie headers
@@ -445,8 +565,8 @@ RSpec.describe Raxon::Response do
       it "accepts options hash" do
         response = Raxon::Response.new
 
-        response.send(:set_cookie, "session", value: "abc123")
-        response.send(:delete_cookie, "session", path: "/", domain: "example.com")
+        response.set_cookie "session", value: "abc123"
+        response.delete_cookie "session", path: "/", domain: "example.com"
 
         _status, headers, _body = response.to_rack
         cookie_headers = headers["set-cookie"]
@@ -460,7 +580,7 @@ RSpec.describe Raxon::Response do
       it "sets redirect location and status" do
         response = Raxon::Response.new
 
-        response.send(:redirect, "/login", 302)
+        response.redirect "/login", 302
 
         status, headers, _body = response.to_rack
         expect(status).to eq(302)
@@ -470,7 +590,7 @@ RSpec.describe Raxon::Response do
       it "defaults to 302 status" do
         response = Raxon::Response.new
 
-        response.send(:redirect, "/login")
+        response.redirect "/login"
 
         status, _headers, _body = response.to_rack
         expect(status).to eq(302)

@@ -36,6 +36,7 @@ RSpec.configure do |config|
       config.routes_directory = "routes"
     end
     Raxon::RouteLoader.reset!
+    Raxon::OpenApi::DSL.reset!
   end
 
   # Load fixture routes when load_routes: true is set on a spec

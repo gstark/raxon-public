@@ -27,6 +27,141 @@ RSpec.describe Raxon::Request do
     end
   end
 
+  describe "source-specific params" do
+    it "exposes query parameters without body or path parameters" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users/123?filter=active&shared=query",
+        :method => "POST",
+        :input => {shared: "body", name: "Ada"}.to_json,
+        "CONTENT_TYPE" => "application/json"
+      )
+      rack_request["router.params"] = {"id" => "123", "shared" => "path"}
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.query_params).to eq(filter: "active", shared: "query")
+    end
+
+    it "exposes path parameters from router params with symbol keys" do
+      rack_request = Rack::MockRequest.env_for("/users/123?include=posts")
+      rack_request["router.params"] = {"id" => "123"}
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.path_params).to eq(id: "123")
+    end
+
+    it "returns an empty hash for path parameters when no route params are present" do
+      request = Raxon::Request.new(Rack::Request.new(Rack::MockRequest.env_for("/users")))
+
+      expect(request.path_params).to eq({})
+    end
+
+    it "exposes JSON body parameters without query, form, or path parameters" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users/123?name=query",
+        :method => "POST",
+        :input => {name: "Ada", age: 37}.to_json,
+        "CONTENT_TYPE" => "application/json"
+      )
+      rack_request["router.params"] = {"id" => "123"}
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.body_params).to eq(name: "Ada", age: 37)
+    end
+
+    it "returns an empty hash for body parameters when JSON body is not an object" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users",
+        :method => "POST",
+        :input => ["Ada"].to_json,
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.body_params).to eq({})
+    end
+
+    it "marks JSON parse errors through body_params and keeps params empty" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users?name=query",
+        :method => "POST",
+        :input => "{invalid json",
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.body_params).to eq({})
+      expect(request.json_parse_error).to be(true)
+      expect(request.params).to eq({})
+    end
+
+    it "exposes form parameters without query or path parameters" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users/123?name=query&shared=query",
+        :method => "POST",
+        :params => {"name" => "form", "shared" => "form"},
+        "CONTENT_TYPE" => "application/x-www-form-urlencoded"
+      )
+      rack_request["router.params"] = {"id" => "123", "shared" => "path"}
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.form_params).to eq(name: "form", shared: "form")
+    end
+
+    it "returns an empty hash for form parameters on JSON requests" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users",
+        :method => "POST",
+        :input => {name: "Ada"}.to_json,
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.form_params).to eq({})
+    end
+
+    it "preserves source-specific values when merged params have collisions" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users/path?shared=query",
+        :method => "POST",
+        :input => {shared: "body"}.to_json,
+        "CONTENT_TYPE" => "application/json"
+      )
+      rack_request["router.params"] = {"shared" => "path"}
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.query_params[:shared]).to eq("query")
+      expect(request.body_params[:shared]).to eq("body")
+      expect(request.path_params[:shared]).to eq("path")
+      expect(request.params[:shared]).to eq("path")
+    end
+
+    it "does not consume the request body when body_params is read before params" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users?source=query",
+        :method => "POST",
+        :input => {name: "Ada"}.to_json,
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.body_params).to eq(name: "Ada")
+      expect(request.params).to eq(source: "query", name: "Ada")
+    end
+
+    it "keeps source-specific params raw while merged params are validated and coerced" do
+      schema = Dry::Schema.Params do
+        required(:age).filled(:integer)
+      end
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.instance_variable_set(:@request_schema, schema)
+      rack_request = Rack::MockRequest.env_for("/users?age=37")
+      request = Raxon::Request.new(Rack::Request.new(rack_request), endpoint)
+
+      expect(request.query_params).to eq(age: "37")
+      expect(request.params).to eq(age: 37)
+    end
+  end
+
   describe "#params" do
     it "returns query parameters" do
       rack_request = Rack::MockRequest.env_for("/test?foo=bar&baz=qux")

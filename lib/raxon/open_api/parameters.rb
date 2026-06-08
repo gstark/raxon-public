@@ -32,6 +32,7 @@ module Raxon
         parameter = Parameter.new(name, **options)
         yield parameter if block_given?
         @parameters << parameter
+        parameter
       end
     end
   end

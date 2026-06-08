@@ -146,6 +146,103 @@ RSpec.describe Raxon::Request, "request_body validation" do
     end
   end
 
+  context "with date/time convenience types" do
+    it "validates date/time, uuid, email convenience types as strings" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :starts_at, type: :datetime
+        body.property :birthday, type: :date
+        body.property :user_id, type: :uuid
+        body.property :email, type: :email
+      end
+
+      json_body = JSON.generate({starts_at: "2026-06-07T12:00:00Z", birthday: "2026-06-07", user_id: "123e4567-e89b-12d3-a456-426614174000", email: "user@example.com"})
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => json_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_env), endpoint)
+
+      request.params
+      expect(request.validation_errors).to be_nil
+    end
+
+    it "rejects non-string values for date/time convenience types" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :starts_at, type: :datetime
+      end
+
+      json_body = JSON.generate({starts_at: 123})
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => json_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_env), endpoint)
+
+      request.params
+      expect(request.validation_errors).to include(:starts_at)
+    end
+  end
+
+  context "with schema constraints" do
+    it "validates request body property constraints" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :name, type: :string, min_length: 3, max_length: 5, pattern: "^[a-z]+$"
+        body.property :age, type: :integer, minimum: 18, maximum: 65
+        body.property :tags, type: :array, of: :string, min_items: 1, max_items: 2
+      end
+
+      json_body = JSON.generate({name: "AB", age: 17, tags: []})
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => json_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      request = Raxon::Request.new(Rack::Request.new(rack_env), endpoint)
+
+      request.params
+      expect(request.validation_errors).to include(:name, :age, :tags)
+    end
+
+    it "coerces integer request body properties and validates maximum" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :age, type: :integer, minimum: 0, maximum: 130
+      end
+
+      valid_body = JSON.generate({age: "42"})
+      valid_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => valid_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      valid_request = Raxon::Request.new(Rack::Request.new(valid_env), endpoint)
+
+      expect(valid_request.params[:age]).to eq(42)
+      expect(valid_request.validation_errors).to be_nil
+
+      invalid_body = JSON.generate({age: 140})
+      invalid_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => invalid_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      invalid_request = Raxon::Request.new(Rack::Request.new(invalid_env), endpoint)
+
+      invalid_request.params
+      expect(invalid_request.validation_errors).to include(:age)
+    end
+  end
+
   context "with file type properties" do
     it "wraps Hash file params in Raxon::UploadedFile" do
       endpoint = Raxon::OpenApi::Endpoint.new

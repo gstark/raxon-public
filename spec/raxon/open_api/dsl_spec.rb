@@ -1,6 +1,52 @@
 require "spec_helper"
 
 RSpec.describe Raxon::OpenApi::DSL do
+  describe Raxon::OpenApi::Specification do
+    it "keeps endpoints and components isolated between instances" do
+      first_spec = described_class.new
+      second_spec = described_class.new
+
+      first_spec.component("User", type: :object) do |component|
+        component.property :id, type: :integer
+      end
+      first_spec.endpoint do |endpoint|
+        endpoint.path "/users"
+        endpoint.operation :get
+        endpoint.response 200, type: :object, as: "User"
+      end
+
+      second_spec.component("Post", type: :object) do |component|
+        component.property :id, type: :integer
+      end
+      second_spec.endpoint do |endpoint|
+        endpoint.path "/posts"
+        endpoint.operation :get
+        endpoint.response 200, type: :object, as: "Post"
+      end
+
+      first_openapi = first_spec.to_open_api
+      second_openapi = second_spec.to_open_api
+
+      expect(first_openapi["paths"].keys).to eq(["/users"])
+      expect(first_openapi["components"]["schemas"].keys).to eq(["User"])
+      expect(second_openapi["paths"].keys).to eq(["/posts"])
+      expect(second_openapi["components"]["schemas"].keys).to eq(["Post"])
+    end
+
+    it "resets only that specification instance" do
+      first_spec = described_class.new
+      second_spec = described_class.new
+
+      first_spec.component("User", type: :object)
+      second_spec.component("Post", type: :object)
+
+      first_spec.reset!
+
+      expect(first_spec.components).to eq([])
+      expect(second_spec.components.map(&:name)).to eq(["Post"])
+    end
+  end
+
   describe ".component" do
     it "creates a new component" do
       component = nil
@@ -16,7 +62,7 @@ RSpec.describe Raxon::OpenApi::DSL do
 
     it "adds the component to the components array" do
       described_class.component("Post", type: :object)
-      expect(described_class.class_variable_get(:@@components)).to include(an_instance_of(Raxon::OpenApi::Component))
+      expect(described_class.components).to include(an_instance_of(Raxon::OpenApi::Component))
     end
   end
 
@@ -32,7 +78,7 @@ RSpec.describe Raxon::OpenApi::DSL do
 
     it "adds the endpoint to the endpoints array" do
       described_class.endpoint
-      expect(described_class.class_variable_get(:@@endpoints)).to include(an_instance_of(Raxon::OpenApi::Endpoint))
+      expect(described_class.endpoints).to include(an_instance_of(Raxon::OpenApi::Endpoint))
     end
   end
 
@@ -40,6 +86,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     it "converts symbol types to strings" do
       expect(described_class.process_type(:string)).to eq("string")
       expect(described_class.process_type(:number)).to eq("number")
+      expect(described_class.process_type(:integer)).to eq("integer")
       expect(described_class.process_type(:boolean)).to eq("boolean")
       expect(described_class.process_type(:object)).to eq("object")
       expect(described_class.process_type(:array)).to eq("array")
@@ -72,8 +119,7 @@ RSpec.describe Raxon::OpenApi::DSL do
 
   describe ".to_open_api" do
     before do
-      described_class.class_variable_set(:@@components, [])
-      described_class.class_variable_set(:@@endpoints, [])
+      described_class.reset!
     end
 
     it "generates a valid OpenAPI specification" do
@@ -108,6 +154,7 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(spec["paths"]).to include(
         "/api/v1/posts" => {
           "get" => {
+            "description" => "Fetches the list of posts",
             "parameters" => [
               {
                 "name" => "filter",
@@ -158,6 +205,80 @@ RSpec.describe Raxon::OpenApi::DSL do
       )
     end
 
+    it "outputs standard OpenAPI date and date-time formats" do
+      described_class.component("Event", type: :object) do |event|
+        event.property(:starts_at, type: :datetime)
+        event.property(:birthday, type: :date)
+        event.property(:legacy_at, type: "Dayjs")
+        event.property(:published_at, type: :string, format: :date_time)
+        event.property(:event_ids, type: :array, of: :uuid)
+        event.property(:email_addresses, type: :array, of: :email)
+      end
+
+      spec = described_class.to_open_api
+      properties = spec["components"]["schemas"]["Event"]["properties"]
+
+      expect(properties["starts_at"]).to include("type" => "string", "format" => "date-time")
+      expect(properties["birthday"]).to include("type" => "string", "format" => "date")
+      expect(properties["legacy_at"]).to include("type" => "string", "format" => "date-time")
+      expect(properties["published_at"]).to include("type" => "string", "format" => "date-time")
+      expect(properties["event_ids"]["items"]).to include("type" => "string", "format" => "uuid")
+      expect(properties["email_addresses"]["items"]).to include("type" => "string", "format" => "email")
+    end
+
+    it "maps database date/time columns to standard OpenAPI date formats" do
+      timestamp_options = described_class.send(:build_property_options, "timestamp(6) without time zone", false, "Created at", false, nil)
+      date_options = described_class.send(:build_property_options, "date", false, "Birthday", true, nil)
+      timestamp_array_options = described_class.send(:build_property_options, "timestamp(6) without time zone", true, "Event times", false, nil)
+
+      expect(timestamp_options).to include(type: :datetime, format: :date_time)
+      expect(date_options).to include(type: :date, format: :date)
+      expect(timestamp_array_options).to include(type: :array, of: :datetime)
+    end
+
+    it "maps database integer columns to integer OpenAPI type" do
+      integer_options = described_class.send(:build_property_options, "integer", false, "ID", false, nil)
+      bigint_array_options = described_class.send(:build_property_options, "bigint", true, "IDs", false, nil)
+      numeric_options = described_class.send(:build_property_options, "numeric(10,2)", false, "Price", false, nil)
+
+      expect(integer_options).to include(type: :integer)
+      expect(bigint_array_options).to include(type: :array, of: :integer)
+      expect(numeric_options).to include(type: :number)
+    end
+
+    it "includes schema metadata in the OpenAPI specification" do
+      described_class.component("User", type: :object) do |user|
+        user.property(:email, type: :string, format: :email, example: "user@example.com", default: "unknown@example.com", min_length: 3, max_length: 255, pattern: "^[^@]+@[^@]+$")
+        user.property(:age, type: :integer, minimum: 0, maximum: 130)
+        user.property(:tags, type: :array, of: :string, min_items: 1, max_items: 5, unique_items: true)
+        user.property(:scores, type: :array, of: :integer)
+      end
+
+      spec = described_class.to_open_api
+      properties = spec["components"]["schemas"]["User"]["properties"]
+
+      expect(properties["email"]).to include(
+        "type" => "string",
+        "format" => "email",
+        "example" => "user@example.com",
+        "default" => "unknown@example.com",
+        "minLength" => 3,
+        "maxLength" => 255,
+        "pattern" => "^[^@]+@[^@]+$"
+      )
+      expect(properties["age"]).to include(
+        "type" => "integer",
+        "minimum" => 0,
+        "maximum" => 130
+      )
+      expect(properties["tags"]).to include(
+        "minItems" => 1,
+        "maxItems" => 5,
+        "uniqueItems" => true
+      )
+      expect(properties["scores"]["items"]).to include("type" => "integer")
+    end
+
     it "includes allowable_values as enum in the OpenAPI specification" do
       described_class.component("Status", type: :object) do |status|
         status.property(:state, type: :string, description: "The current state", allowable_values: ["active", "inactive", "pending"])
@@ -169,6 +290,129 @@ RSpec.describe Raxon::OpenApi::DSL do
         "type" => "string",
         "description" => "The current state",
         "enum" => ["active", "inactive", "pending"]
+      )
+    end
+
+    it "includes operation metadata in the OpenAPI specification" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/posts")
+        endpoint.summary("List posts")
+        endpoint.description("Fetches posts")
+        endpoint.operation_id("listPosts")
+        endpoint.tags("Posts", "Public")
+        endpoint.deprecated(true)
+        endpoint.security(:api_key)
+
+        endpoint.response(200, type: :array, of: :object)
+      end
+
+      spec = described_class.to_open_api
+      operation = spec["paths"]["/api/v1/posts"]["get"]
+
+      expect(operation).to include(
+        "summary" => "List posts",
+        "description" => "Fetches posts",
+        "operationId" => "listPosts",
+        "tags" => ["Posts", "Public"],
+        "deprecated" => true,
+        "security" => [{"api_key" => []}]
+      )
+    end
+
+    it "omits unset optional operation metadata from the OpenAPI specification" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/posts")
+        endpoint.response(200, type: :array, of: :object)
+      end
+
+      spec = described_class.to_open_api
+      operation = spec["paths"]["/api/v1/posts"]["get"]
+
+      expect(operation).not_to have_key("summary")
+      expect(operation).not_to have_key("description")
+      expect(operation).not_to have_key("operationId")
+      expect(operation).not_to have_key("tags")
+      expect(operation).not_to have_key("deprecated")
+      expect(operation).not_to have_key("security")
+    end
+
+    it "includes standard error response helpers in the OpenAPI specification" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/users/{id}")
+        endpoint.response(200, type: :object)
+        endpoint.validation_error_response
+        endpoint.unauthorized_response
+        endpoint.not_found_response
+        endpoint.error_response 500, description: "Server error"
+      end
+
+      spec = described_class.to_open_api
+      responses = spec["paths"]["/api/v1/users/{id}"]["get"]["responses"]
+
+      expect(responses.keys).to include("400", "401", "404", "500")
+      expect(responses["400"]["description"]).to eq("Validation error")
+      expect(responses["400"]["content"]["application/json"]["schema"]["properties"]).to include(
+        "error" => include("type" => "string"),
+        "details" => include("type" => "object")
+      )
+      expect(responses["401"]["description"]).to eq("Unauthorized")
+      expect(responses["401"]["content"]["application/json"]["schema"]["properties"].keys).to eq(["error"])
+      expect(responses["404"]["description"]).to eq("Not found")
+      expect(responses["500"]["description"]).to eq("Server error")
+    end
+
+    it "includes endpoint parameter shorthands in the OpenAPI specification" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/users/{id}")
+
+        endpoint.path_param :id, type: :string, description: "User ID"
+        endpoint.query_param :include, type: :string, min_length: 3, max_length: 20, pattern: "^[a-z_]+$"
+        endpoint.header_param :authorization, type: :string, required: true
+        endpoint.cookie_param :session_id, type: :string
+
+        endpoint.response(200, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      parameters = spec["paths"]["/api/v1/users/{id}"]["get"]["parameters"]
+
+      expect(parameters).to include(
+        include("name" => "id", "in" => "path", "required" => true, "description" => "User ID"),
+        include(
+          "name" => "include",
+          "in" => "query",
+          "required" => false,
+          "schema" => include("minLength" => 3, "maxLength" => 20, "pattern" => "^[a-z_]+$")
+        ),
+        include("name" => "authorization", "in" => "header", "required" => true),
+        include("name" => "session_id", "in" => "cookie", "required" => false)
+      )
+    end
+
+    it "creates requestBody using the body shorthand" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:post)
+        endpoint.path("/api/v1/users")
+
+        endpoint.body type: :object, description: "User data", required: true do |body|
+          body.property(:name, type: :string)
+        end
+
+        endpoint.response(201, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      request_body = spec["paths"]["/api/v1/users"]["post"]["requestBody"]
+
+      expect(request_body).not_to be_nil
+      expect(request_body["required"]).to eq(true)
+      expect(request_body["description"]).to eq("User data")
+      expect(request_body["content"]["application/json"]["schema"]["properties"]).to include(
+        "name" => include("type" => "string")
       )
     end
 
@@ -579,6 +823,131 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(json_body["error"]).to eq("Response validation failed")
       expect(json_body["status_code"]).to eq(200)
       expect(json_body["details"]).to have_key("id")
+    end
+
+    it "hides response validation details when configured" do
+      Raxon.configure { |config| config.expose_validation_details = false }
+
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.response 200, type: :object do |response|
+          response.property :status, type: :string, required: true
+          response.property :id, type: :integer, required: true
+        end
+
+        endpoint.handler do |_request, response|
+          response.ok(status: "ok")
+        end
+      end
+
+      status, _, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/test"))
+
+      expect(status).to eq(500)
+      json_body = JSON.parse(body.first)
+      expect(json_body["error"]).to eq("Response validation failed")
+      expect(json_body).not_to have_key("details")
+    end
+
+    it "skips response validation when configured false" do
+      Raxon.configure { |config| config.response_validation = false }
+
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.response 200, type: :object do |response|
+          response.property :status, type: :string, required: true
+          response.property :id, type: :integer, required: true
+        end
+
+        endpoint.handler do |_request, response|
+          response.ok(status: "ok")
+        end
+      end
+
+      status, _, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/test"))
+
+      expect(status).to eq(200)
+      expect(JSON.parse(body.first)).to eq("status" => "ok")
+    end
+
+    it "logs response validation failures without exposing them when configured to log" do
+      Raxon.configure do |config|
+        config.response_validation = :log
+        config.expose_validation_details = false
+      end
+
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.response 200, type: :object do |response|
+          response.property :status, type: :string, required: true
+          response.property :id, type: :integer, required: true
+        end
+
+        endpoint.handler do |_request, response|
+          response.ok(status: "ok")
+        end
+      end
+
+      expect {
+        status, _, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/test"))
+        expect(status).to eq(200)
+        expect(JSON.parse(body.first)).to eq("status" => "ok")
+      }.to output(/Response validation failed/).to_stderr
+    end
+
+    it "raises response validation failures when configured to raise" do
+      Raxon.configure { |config| config.response_validation = :raise }
+
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.response 200, type: :object do |response|
+          response.property :status, type: :string, required: true
+          response.property :id, type: :integer, required: true
+        end
+
+        endpoint.handler do |_request, response|
+          response.ok(status: "ok")
+        end
+      end
+
+      expect {
+        Raxon::Router.new.call(Rack::MockRequest.env_for("/test"))
+      }.to raise_error(Raxon::ResponseValidationError, /Response validation failed/)
+    end
+
+    it "allows endpoints to disable response validation" do
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.validate_response false
+        endpoint.response 200, type: :object do |response|
+          response.property :status, type: :string, required: true
+          response.property :id, type: :integer, required: true
+        end
+
+        endpoint.handler do |_request, response|
+          response.ok(status: "ok")
+        end
+      end
+
+      status, _, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/test"))
+
+      expect(status).to eq(200)
+      expect(JSON.parse(body.first)).to eq("status" => "ok")
+    end
+
+    it "allows endpoints to force response validation when global validation is disabled" do
+      Raxon.configure { |config| config.response_validation = false }
+
+      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        endpoint.validate_response true
+        endpoint.response 200, type: :object do |response|
+          response.property :status, type: :string, required: true
+          response.property :id, type: :integer, required: true
+        end
+
+        endpoint.handler do |_request, response|
+          response.ok(status: "ok")
+        end
+      end
+
+      status, _, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/test"))
+
+      expect(status).to eq(500)
+      expect(JSON.parse(body.first)["error"]).to eq("Response validation failed")
     end
 
     it "skips validation when no schema defined for status code" do

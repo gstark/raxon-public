@@ -42,12 +42,25 @@ require_relative "raxon/request"
 require_relative "raxon/response"
 require_relative "raxon/routes"
 require_relative "raxon/route_loader"
+require_relative "raxon/route_dsl"
 require_relative "raxon/router"
 require_relative "raxon/server"
 require_relative "raxon/version"
 
 module Raxon
   class Error < StandardError; end
+
+  # Exception raised when a response body fails schema validation and
+  # response_validation is configured as :raise.
+  class ResponseValidationError < Error
+    attr_reader :status_code, :errors
+
+    def initialize(status_code:, errors:)
+      @status_code = status_code
+      @errors = errors
+      super("Response validation failed for status #{status_code}")
+    end
+  end
 
   # Exception raised when Response#halt is called to stop request processing.
   #

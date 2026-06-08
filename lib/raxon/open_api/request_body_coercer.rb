@@ -117,8 +117,11 @@ module Raxon
       # @param value [Object]
       # @return [Object]
       def coerce_array(property, value)
-        return value unless value.is_a?(Array)
-        return value unless property.properties.any? && (property.of.nil? || property.of.to_s == "object")
+        value_is_an_array = value.is_a?(Array)
+        return value unless value_is_an_array
+
+        coerces_object_items = property.properties.any? && (property.of.nil? || property.of.to_s == "object")
+        return value unless coerces_object_items
 
         value.each do |item|
           coerce_properties(property.properties, item) if item.is_a?(Hash)

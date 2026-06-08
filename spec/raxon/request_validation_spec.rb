@@ -61,6 +61,43 @@ RSpec.describe Raxon::Request, "parameter validation" do
         result = request.params
         expect(result).to eq({name: "test"})
       end
+
+      it "validates parameter schema constraints" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.query_param :name, type: :string, min_length: 3, max_length: 5, pattern: "^[a-z]+$"
+        endpoint.query_param :age, type: :integer, minimum: 18, maximum: 65
+
+        env = Rack::MockRequest.env_for("/test?name=AB&age=17")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        request.params
+        expect(request.validation_errors).to include(:name, :age)
+      end
+
+      it "coerces integer parameters and validates integer constraints" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.query_param :age, type: :integer, minimum: 0, maximum: 130
+
+        env = Rack::MockRequest.env_for("/test?age=42")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        expect(request.params[:age]).to eq(42)
+        expect(request.validation_errors).to be_nil
+      end
+
+      it "rejects integer parameters above maximum" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.query_param :age, type: :integer, minimum: 0, maximum: 130
+
+        env = Rack::MockRequest.env_for("/test?age=140")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        request.params
+        expect(request.validation_errors).to include(:age)
+      end
     end
 
     context "with JSON body" do

@@ -38,9 +38,9 @@ module Raxon
 
       def dry_schema_type(field_type)
         case field_type
-        when "string"
+        when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
           :string
-        when "number"
+        when "number", "integer"
           :integer
         when "boolean"
           :bool
@@ -55,9 +55,9 @@ module Raxon
 
       def map_type_to_dry(openapi_type)
         case openapi_type
-        when "string"
+        when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
           "params.string"
-        when "number"
+        when "number", "integer"
           "params.integer"
         when "boolean"
           "params.bool"
@@ -121,14 +121,20 @@ module Raxon
         key = field_key(schema_context, field_name, field)
         builder = self
 
+        constraints = dry_constraints_for(field, :array)
+
         if field.nullable
-          key.maybe(:array) do
+          key.maybe(:array, **constraints) do
             each(:hash) do
               builder.add_properties_to_schema(self, field.properties)
             end
           end
-        else
+        elsif constraints.empty?
           key.array(:hash) do
+            builder.add_properties_to_schema(self, field.properties)
+          end
+        else
+          key.value(:array, **constraints).each(:hash) do
             builder.add_properties_to_schema(self, field.properties)
           end
         end
@@ -138,12 +144,16 @@ module Raxon
         key = field_key(schema_context, field_name, field)
         item_type = array_scalar_item_type(field)
 
+        constraints = dry_constraints_for(field, :array)
+
         if field.nullable
-          key.maybe(:array) do
+          key.maybe(:array, **constraints) do
             each(item_type)
           end
-        else
+        elsif constraints.empty?
           key.array(item_type)
+        else
+          key.value(:array, **constraints).each(item_type)
         end
       end
 
@@ -151,10 +161,12 @@ module Raxon
         key = field_key(schema_context, field_name, field)
         type = dry_schema_type(field.type)
 
+        constraints = dry_constraints_for(field, type)
+
         if field.nullable
-          key.maybe(type)
+          key.maybe(type, **constraints)
         else
-          key.value(type)
+          key.value(type, **constraints)
         end
       end
 
@@ -183,6 +195,28 @@ module Raxon
 
       def field_key(schema_context, field_name, field)
         field.required ? schema_context.required(field_name) : schema_context.optional(field_name)
+      end
+
+      def dry_constraints_for(field, dry_type)
+        constraints = {}
+
+        if dry_type == :string
+          constraints[:min_size?] = field.min_length if field.respond_to?(:min_length) && field.min_length
+          constraints[:max_size?] = field.max_length if field.respond_to?(:max_length) && field.max_length
+          constraints[:format?] = Regexp.new(field.pattern.to_s) if field.respond_to?(:pattern) && field.pattern
+        end
+
+        if dry_type == :integer
+          constraints[:gteq?] = field.minimum if field.respond_to?(:minimum) && field.minimum
+          constraints[:lteq?] = field.maximum if field.respond_to?(:maximum) && field.maximum
+        end
+
+        if dry_type == :array
+          constraints[:min_size?] = field.min_items if field.respond_to?(:min_items) && field.min_items
+          constraints[:max_size?] = field.max_items if field.respond_to?(:max_items) && field.max_items
+        end
+
+        constraints
       end
     end
   end

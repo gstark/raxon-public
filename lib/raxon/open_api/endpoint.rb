@@ -39,6 +39,12 @@ module Raxon
         @erb_template = nil
         @route_context = nil
         @operations = []
+        @summary = nil
+        @operation_id = nil
+        @tags = []
+        @deprecated = false
+        @security = nil
+        @validate_response = nil
         @responses = {}
         @parameters = Parameters.new
         @request_body = nil
@@ -74,6 +80,81 @@ module Raxon
         return @description if args.empty?
 
         @description = args[0]
+      end
+
+      # Get or set the OpenAPI operation summary.
+      #
+      # @param args [Array] Optional summary string
+      # @return [String, nil]
+      def summary(*args)
+        return @summary if args.empty?
+
+        @summary = args[0]
+      end
+
+      # Get or set the OpenAPI operationId.
+      #
+      # @param args [Array] Optional operationId string
+      # @return [String, nil]
+      def operation_id(*args)
+        return @operation_id if args.empty?
+
+        @operation_id = args[0]
+      end
+
+      # Get or set OpenAPI operation tags.
+      #
+      # @param values [Array<String, Symbol, Array>] Tags to assign
+      # @return [Array<String, Symbol>]
+      def tags(*values)
+        return @tags if values.empty?
+
+        @tags = values.flatten
+      end
+
+      # Get or set whether the OpenAPI operation is deprecated.
+      #
+      # @param args [Array] Optional boolean flag
+      # @return [Boolean]
+      def deprecated(*args)
+        return @deprecated if args.empty?
+
+        @deprecated = args[0]
+      end
+
+      # Get or set OpenAPI security requirements.
+      #
+      # Accepts either a full OpenAPI security requirement array/hash or a scheme
+      # name plus optional scopes.
+      #
+      # @param requirement [Symbol, String, Hash, Array, nil]
+      # @param scopes [Array<String>] Scopes for scheme-name shorthand
+      # @return [Array<Hash>, Hash, nil]
+      def security(requirement = nil, scopes: [])
+        return @security if requirement.nil?
+
+        @security = case requirement
+        when Array
+          requirement
+        when Hash
+          [requirement]
+        else
+          [{requirement => scopes}]
+        end
+      end
+
+      # Get or set per-endpoint response validation override.
+      #
+      # When nil, the global Raxon.configuration.response_validation setting is
+      # used. false disables validation for this endpoint, and true forces the
+      # configured validation failure behavior even if the global setting is false.
+      #
+      # @param args [Array] Optional boolean override
+      # @return [Boolean, nil]
+      def validate_response(*args)
+        return @validate_response if args.empty?
+
+        @validate_response = args[0]
       end
 
       # Add a before hook that will be called before the handler.
@@ -189,6 +270,68 @@ module Raxon
         end
       end
 
+      # Alias for request_body with a shorter route-file API.
+      #
+      # @param options [Hash, nil] Request body options
+      # @yield [RequestBody] The request body object for configuration
+      # @return [RequestBody, nil] The request body object when called without arguments
+      #
+      # @example
+      #   endpoint.body type: :object do |body|
+      #     body.property :name, type: :string
+      #   end
+      def body(options = nil, &block)
+        request_body(options, &block)
+      end
+
+      # Define a path parameter.
+      #
+      # Path parameters are required by default.
+      #
+      # @param name [Symbol, String] Parameter name
+      # @param options [Hash] Parameter options
+      # @yield [Parameter] The parameter object for further configuration
+      # @return [Parameter] The created parameter
+      def path_param(name, **options, &block)
+        define_parameter(name, :path, true, options, &block)
+      end
+
+      # Define a query string parameter.
+      #
+      # Query parameters are optional by default.
+      #
+      # @param name [Symbol, String] Parameter name
+      # @param options [Hash] Parameter options
+      # @yield [Parameter] The parameter object for further configuration
+      # @return [Parameter] The created parameter
+      def query_param(name, **options, &block)
+        define_parameter(name, :query, false, options, &block)
+      end
+
+      # Define a header parameter.
+      #
+      # Header parameters are optional by default.
+      #
+      # @param name [Symbol, String] Parameter name
+      # @param options [Hash] Parameter options
+      # @yield [Parameter] The parameter object for further configuration
+      # @return [Parameter] The created parameter
+      def header_param(name, **options, &block)
+        define_parameter(name, :header, false, options, &block)
+      end
+
+      # Define a cookie parameter.
+      #
+      # Cookie parameters are optional by default.
+      #
+      # @param name [Symbol, String] Parameter name
+      # @param options [Hash] Parameter options
+      # @yield [Parameter] The parameter object for further configuration
+      # @return [Parameter] The created parameter
+      def cookie_param(name, **options, &block)
+        define_parameter(name, :cookie, false, options, &block)
+      end
+
       # Define a response for this endpoint.
       #
       # @param status [Integer] HTTP status code (e.g., 200, 404, 500)
@@ -203,6 +346,57 @@ module Raxon
       def response(status, options, &block)
         @responses[status] = Response.new(**options)
         yield @responses[status] if block_given?
+        @responses[status]
+      end
+
+      # Define a standard validation error response for this endpoint.
+      #
+      # @param status [Symbol, Integer] HTTP status code (default: 400)
+      # @param description [String] Response description
+      # @yield [Response] The response object for customization
+      # @return [Response] The created response
+      #
+      # @example
+      #   endpoint.validation_error_response
+      def validation_error_response(status = 400, description: "Validation error", &block)
+        standard_error_response(status, description: description, include_details: true, &block)
+      end
+
+      # Define a standard unauthorized response for this endpoint.
+      #
+      # @param description [String] Response description
+      # @yield [Response] The response object for customization
+      # @return [Response] The created response
+      #
+      # @example
+      #   endpoint.unauthorized_response
+      def unauthorized_response(description: "Unauthorized", &block)
+        standard_error_response(401, description: description, include_details: false, &block)
+      end
+
+      # Define a standard not found response for this endpoint.
+      #
+      # @param description [String] Response description
+      # @yield [Response] The response object for customization
+      # @return [Response] The created response
+      #
+      # @example
+      #   endpoint.not_found_response
+      def not_found_response(description: "Not found", &block)
+        standard_error_response(404, description: description, include_details: false, &block)
+      end
+
+      # Define a standard error response for this endpoint.
+      #
+      # @param status [Symbol, Integer] HTTP status code (default: 500)
+      # @param description [String] Response description
+      # @yield [Response] The response object for customization
+      # @return [Response] The created response
+      #
+      # @example
+      #   endpoint.error_response 500
+      def error_response(status = 500, description: "Error", &block)
+        standard_error_response(status, description: description, include_details: true, &block)
       end
 
       # Define a standard exception error response for this endpoint.
@@ -436,6 +630,23 @@ module Raxon
 
       private
 
+      def standard_error_response(status, description:, include_details:, &block)
+        response(status, type: :object, description: description) do |resp|
+          resp.property :error, type: :string, description: "Error message"
+          resp.property :details, type: :object, description: "Error details", required: false if include_details
+          block&.call(resp)
+        end
+      end
+
+      def define_parameter(name, location, default_required, options, &block)
+        parameter_options = options.merge(
+          in: location,
+          required: options.fetch(:required, default_required)
+        )
+        @request_schema = nil
+        @parameters.define(name, parameter_options, &block)
+      end
+
       # Execute a block in the given context instance.
       #
       # If a context instance is provided, uses instance_exec to run the block
@@ -471,17 +682,53 @@ module Raxon
         # Only validate if we have a schema for this status code and a body to validate
         return unless schema && response.body
 
+        validation_mode = response_validation_mode
+        return if validation_mode == false
+
         result = schema.call(response.body)
         return if result.success?
 
-        # Response validation failure is a server error (programming bug)
-        # Replace the response with an error response
+        handle_response_validation_failure(response, status_code, result.errors.to_h, validation_mode)
+      end
+
+      def response_validation_mode
+        configured_mode = Raxon.configuration.response_validation
+        return false if @validate_response == false
+        return :error_response if @validate_response == true && configured_mode == false
+
+        configured_mode
+      end
+
+      def handle_response_validation_failure(response, status_code, errors, validation_mode)
+        case validation_mode
+        when :raise
+          raise Raxon::ResponseValidationError.new(status_code: status_code, errors: errors)
+        when :log
+          warn response_validation_failure_message(status_code, errors)
+        when :error_response, true
+          write_response_validation_error(response, status_code, errors)
+        else
+          write_response_validation_error(response, status_code, errors)
+        end
+      end
+
+      def write_response_validation_error(response, status_code, errors)
         response.code = :internal_server_error
-        response.body = {
+        response.body = response_validation_error_body(status_code, errors)
+      end
+
+      def response_validation_error_body(status_code, errors)
+        body = {
           error: "Response validation failed",
-          status_code: status_code,
-          details: result.errors.to_h
+          status_code: status_code
         }
+        body[:details] = errors if Raxon.configuration.expose_validation_details
+        body
+      end
+
+      def response_validation_failure_message(status_code, errors)
+        body = response_validation_error_body(status_code, errors)
+        "[Raxon] Response validation failed for status #{status_code}: #{body.inspect}"
       end
     end
   end

@@ -53,6 +53,28 @@ RSpec.describe Raxon::Configuration do
       config = Raxon::Configuration.new
       expect(config.rails_compatible_instrumentation).to eq(false)
     end
+
+    it "uses error response validation with details outside production by default" do
+      config = Raxon::Configuration.new
+
+      expect(config.response_validation).to eq(:error_response)
+      expect(config.expose_validation_details).to be(true)
+    end
+
+    it "uses log response validation without details in production by default" do
+      original_raxon_env = ENV["RAXON_ENV"]
+      original_rack_env = ENV["RACK_ENV"]
+      ENV["RAXON_ENV"] = "production"
+      ENV.delete("RACK_ENV")
+
+      config = Raxon::Configuration.new
+
+      expect(config.response_validation).to eq(:log)
+      expect(config.expose_validation_details).to be(false)
+    ensure
+      ENV["RAXON_ENV"] = original_raxon_env
+      ENV["RACK_ENV"] = original_rack_env
+    end
   end
 
   describe "#on_error" do
