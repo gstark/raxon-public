@@ -1,4 +1,4 @@
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Test endpoint for JSON validation"
 
   endpoint.request_body type: :object, description: "Test data", required: true do |body|

@@ -15,7 +15,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.before { |request, response, metadata| execution_order << :global_before }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -37,7 +37,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.before { |request, response, metadata| execution_order << :global_before_2 }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -58,7 +58,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.before { |request, response, metadata| execution_order << :global_before }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.before { |request, response, metadata| execution_order << :route_before }
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
@@ -80,7 +80,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.before { |request, response, metadata| metadata[:global_key] = "global_value" }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           received_metadata = metadata.dup
           response.code = :ok
@@ -105,7 +105,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           handler_called = true
           response.code = :ok
@@ -130,7 +130,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.after { |request, response, metadata| execution_order << :global_after }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -152,7 +152,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.after { |request, response, metadata| execution_order << :global_after_2 }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -173,7 +173,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.after { |request, response, metadata| execution_order << :global_after }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.after { |request, response, metadata| execution_order << :route_after }
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
@@ -196,7 +196,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.after { |request, response, metadata| received_metadata = metadata.dup }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           metadata[:handler_ran] = true
           response.code = :ok
@@ -218,7 +218,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           response.code = :ok
           response.body = {success: true}
@@ -244,7 +244,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -274,7 +274,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -303,7 +303,7 @@ RSpec.describe "Raxon::Router global blocks" do
         config.after { |request, response, metadata| execution_order << :global_after }
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           execution_order << :handler
           response.code = :ok
@@ -329,7 +329,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           received_metadata = metadata.dup
           response.code = :ok
@@ -354,7 +354,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           handler_called = true
           response.code = :ok
@@ -383,7 +383,7 @@ RSpec.describe "Raxon::Router global blocks" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise "Test error"
         end
@@ -412,13 +412,13 @@ RSpec.describe "Raxon::Router global blocks" do
         config.after { |request, response, metadata| execution_order << :global_after }
       end
 
-      Raxon::RouteLoader.register("routes/api/get.rb") do |endpoint|
+      define_route("routes/api/get.rb") do |endpoint|
         endpoint.metadata { |request, response, metadata| execution_order << :parent_metadata }
         endpoint.before { |request, response, metadata| execution_order << :parent_before }
         endpoint.after { |request, response, metadata| execution_order << :parent_after }
       end
 
-      Raxon::RouteLoader.register("routes/api/users/get.rb") do |endpoint|
+      define_route("routes/api/users/get.rb") do |endpoint|
         endpoint.metadata { |request, response, metadata| execution_order << :child_metadata }
         endpoint.before { |request, response, metadata| execution_order << :child_before }
         endpoint.after { |request, response, metadata| execution_order << :child_after }

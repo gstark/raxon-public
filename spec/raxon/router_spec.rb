@@ -126,7 +126,7 @@ RSpec.describe Raxon::Router do
     it "sets route params in env when route has path parameters" do
       env_captured = nil
 
-      Raxon::RouteLoader.register("routes/users/$id/get.rb") do |endpoint|
+      define_route("routes/users/$id/get.rb") do |endpoint|
         endpoint.handler do |request, response|
           env_captured = request.rack_request.env
           response.code = :ok
@@ -146,7 +146,7 @@ RSpec.describe Raxon::Router do
       it "calls before block exactly once per endpoint in a single endpoint request" do
         before_call_count = 0
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.before do |_request, response|
             before_call_count += 1
             response.rack_response["X-Before-Called"] = "yes"
@@ -219,7 +219,7 @@ RSpec.describe Raxon::Router do
         before_call_count = 0
         handler_call_count = 0
 
-        Raxon::RouteLoader.register("routes/api/test/get.rb") do |endpoint|
+        define_route("routes/api/test/get.rb") do |endpoint|
           endpoint.before do |_request, response|
             before_call_count += 1
             response.code = :unauthorized
@@ -380,7 +380,7 @@ RSpec.describe Raxon::Router do
       it "executes metadata blocks before before blocks" do
         execution_order = []
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.metadata do |request, response, metadata|
             execution_order << :metadata
             metadata[:set_in_metadata] = true
@@ -404,7 +404,7 @@ RSpec.describe Raxon::Router do
       it "provides empty metadata hash when no metadata blocks defined" do
         received_metadata = nil
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.handler do |request, response, metadata|
             received_metadata = metadata
             response.code = :ok
@@ -471,7 +471,7 @@ RSpec.describe Raxon::Router do
       it "passes metadata to before blocks" do
         received_metadata = nil
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.metadata do |request, response, metadata|
             metadata[:auth_user] = "test_user"
           end
@@ -493,7 +493,7 @@ RSpec.describe Raxon::Router do
       it "allows before blocks to modify metadata for handler" do
         received_metadata = nil
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.metadata do |request, response, metadata|
             metadata[:initial] = "from_metadata"
           end
@@ -517,14 +517,14 @@ RSpec.describe Raxon::Router do
       it "passes same metadata hash to all before blocks in hierarchy" do
         metadata_object_ids = []
 
-        Raxon::RouteLoader.register("routes/api/get.rb") do |endpoint|
+        define_route("routes/api/get.rb") do |endpoint|
           endpoint.before do |request, response, metadata|
             metadata_object_ids << metadata.object_id
             metadata[:parent_set] = true
           end
         end
 
-        Raxon::RouteLoader.register("routes/api/users/get.rb") do |endpoint|
+        define_route("routes/api/users/get.rb") do |endpoint|
           endpoint.before do |request, response, metadata|
             metadata_object_ids << metadata.object_id
           end
@@ -547,7 +547,7 @@ RSpec.describe Raxon::Router do
       it "passes metadata to after blocks" do
         received_metadata = nil
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.metadata do |request, response, metadata|
             metadata[:request_id] = "12345"
           end
@@ -569,7 +569,7 @@ RSpec.describe Raxon::Router do
       it "allows after blocks to read metadata set by handler" do
         received_metadata = nil
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.metadata do |request, response, metadata|
             metadata[:from_metadata] = true
           end
@@ -593,7 +593,7 @@ RSpec.describe Raxon::Router do
       it "passes same metadata hash to all after blocks in hierarchy" do
         metadata_object_ids = []
 
-        Raxon::RouteLoader.register("routes/api/get.rb") do |endpoint|
+        define_route("routes/api/get.rb") do |endpoint|
           endpoint.metadata do |request, response, metadata|
             metadata[:original] = true
           end
@@ -602,7 +602,7 @@ RSpec.describe Raxon::Router do
           end
         end
 
-        Raxon::RouteLoader.register("routes/api/users/get.rb") do |endpoint|
+        define_route("routes/api/users/get.rb") do |endpoint|
           endpoint.after do |request, response, metadata|
             metadata_object_ids << metadata.object_id
           end
@@ -624,7 +624,7 @@ RSpec.describe Raxon::Router do
       it "passes the same response object through before block and handler" do
         response_objects = []
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.before do |_request, response|
             response_objects << response.object_id
           end
@@ -697,7 +697,7 @@ RSpec.describe Raxon::Router do
       it "passes the same request object (wrapping same rack_request) through before and handler" do
         request_rack_objects = []
 
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.before do |request, _response|
             request_rack_objects << request.rack_request.object_id
           end

@@ -65,10 +65,8 @@ module Raxon
           resource._attributes.each do |attribute_name, definition|
             next if component&.properties&.key?(attribute_name.to_sym)
 
-            property = component&.properties&.[](attribute_name.to_sym)
-
             if definition.is_a?(Alba::Association)
-              DSL.build_association_property(component, attribute_name, definition, property)
+              DSL.build_association_property(component, attribute_name, definition, nil)
             elsif definition.is_a?(Symbol)
               DSL.build_database_property(component, attribute_name, active_record_class)
             end
@@ -608,7 +606,10 @@ module Raxon
         metadata[:maximum] = property.maximum if schema_metadata_present?(property, :maximum)
         metadata[:minLength] = property.min_length if schema_metadata_present?(property, :min_length)
         metadata[:maxLength] = property.max_length if schema_metadata_present?(property, :max_length)
-        metadata[:pattern] = property.pattern.to_s if schema_metadata_present?(property, :pattern)
+        if schema_metadata_present?(property, :pattern)
+          pattern = property.pattern
+          metadata[:pattern] = pattern.is_a?(Regexp) ? pattern.source : pattern.to_s
+        end
         metadata[:minItems] = property.min_items if schema_metadata_present?(property, :min_items)
         metadata[:maxItems] = property.max_items if schema_metadata_present?(property, :max_items)
         metadata[:uniqueItems] = property.unique_items if schema_metadata_present?(property, :unique_items)

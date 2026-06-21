@@ -55,15 +55,6 @@ Raxon.route do
 end
 ```
 
-The existing explicit interface remains supported for compatibility:
-
-```ruby
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
-  endpoint.description "Health check endpoint"
-  endpoint.handler { |_request, response| response.body = { success: true } }
-end
-```
-
 ### Running the Server
 
 ```bash
@@ -251,7 +242,7 @@ end
 Execute code before the main handler, useful for authentication, logging, and setup:
 
 ```ruby
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   # Before hook runs first
   endpoint.before do |request, response|
     authenticate!(request)
@@ -287,14 +278,14 @@ Before hooks can be defined at parent route levels and automatically apply to al
 
 ```ruby
 # routes/api/v1/before.rb - Applies to all /api/v1/* routes
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.before do |request, response|
     authenticate!(request)  # All v1 endpoints require auth
   end
 end
 
 # routes/api/v1/users/get.rb - Inherits parent before hooks
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.before do |request, response|
     check_rate_limit!(request)  # Additional check for this endpoint
   end
@@ -321,7 +312,7 @@ The `all.rb` file type allows you to define handlers that execute for **all HTTP
 
 ```ruby
 # routes/api/v1/all.rb - Handles all methods for /api/v1/*
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Authentication for all API v1 endpoints"
 
   endpoint.handler do |request, response|
@@ -341,7 +332,7 @@ When both `all.rb` and method-specific files exist, they form a hierarchy:
 
 ```ruby
 # routes/api/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.handler do |request, response|
     # 1. Runs first (shallowest level)
     response.header "X-API-Version", "1.0"
@@ -349,7 +340,7 @@ Raxon::RouteLoader.register(__FILE__) do |endpoint|
 end
 
 # routes/api/v1/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.handler do |request, response|
     # 2. Runs second (deeper level)
     authenticate!(request)
@@ -357,7 +348,7 @@ Raxon::RouteLoader.register(__FILE__) do |endpoint|
 end
 
 # routes/api/v1/users/post.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.handler do |request, response|
     # 3. Runs last (final endpoint)
     response.code = :created
@@ -378,7 +369,7 @@ For a `POST /api/v1/users` request, the execution order is:
 
 ```ruby
 # routes/api/v1/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Require authentication for all v1 endpoints"
 
   endpoint.handler do |request, response|
@@ -400,7 +391,7 @@ end
 
 ```ruby
 # routes/api/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Log all API requests"
 
   endpoint.handler do |request, response|
@@ -418,7 +409,7 @@ end
 
 ```ruby
 # routes/api/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Set CORS headers for all API endpoints"
 
   endpoint.handler do |request, response|
@@ -439,7 +430,7 @@ end
 
 ```ruby
 # routes/api/v1/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Rate limiting for all v1 endpoints"
 
   endpoint.handler do |request, response|
@@ -461,7 +452,7 @@ end
 
 ```ruby
 # routes/api/all.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Add request ID to all responses"
 
   endpoint.handler do |request, response|
@@ -612,15 +603,18 @@ endpoint.header_param :authorization, type: :string, required: true
 endpoint.cookie_param :session_id, type: :string
 ```
 
-The existing explicit parameter interface remains supported:
+The existing explicit parameter interface remains supported. Parameter defaults are location-aware: `in: :path` is required by default, while `in: :query`, `in: :header`, and `in: :cookie` are optional by default. Explicit `required:` values always take precedence.
 
 ```ruby
 endpoint.parameters do |params|
-  params.define :email, type: :string, required: true
-  params.define :age, type: :number, required: false
-  params.define :role, type: :string, in: :query, required: false
+  params.define :id, type: :string, in: :path          # required by default
+  params.define :email, type: :string, required: true  # query param, explicitly required
+  params.define :age, type: :number                    # optional query param by default
+  params.define :authorization, type: :string, in: :header # optional by default
 end
 ```
+
+Compatibility note: older versions defaulted every `params.define` parameter to required. Add `required: true` to query/header/cookie definitions that must remain required.
 
 Invalid requests automatically return 400 Bad Request with error details:
 
@@ -854,7 +848,7 @@ Note: `Raxon.root` raises `Raxon::Error` if accessed before configuration.
 
 ### Global Request Lifecycle Blocks
 
-Raxon supports global before, after, and around blocks that execute for every request. These are useful for cross-cutting concerns like logging, authentication, database connection management, and request timing.
+Raxon supports global before, after, and around blocks that execute for every request. These are useful for cross-cutting concerns like logging, authentication, database connection management, and request timing. Prefer `request.context` for request-scoped application state shared across lifecycle blocks; the `metadata` argument remains available for compatibility.
 
 ```ruby
 Raxon.configure do |config|
@@ -862,19 +856,19 @@ Raxon.configure do |config|
 
   # Global before block - runs before every request
   config.before do |request, response, metadata|
-    metadata[:request_start] = Time.now
-    metadata[:request_id] = SecureRandom.uuid
+    request.context[:request_start] = Time.now
+    request.context[:request_id] = SecureRandom.uuid
   end
 
   # Multiple before blocks can be registered
   config.before do |request, response, metadata|
-    Rails.logger.info "Request #{metadata[:request_id]} started"
+    Rails.logger.info "Request #{request.context.request_id} started"
   end
 
   # Global after block - runs after every request
   config.after do |request, response, metadata|
-    elapsed = Time.now - metadata[:request_start]
-    response.header "X-Request-Id", metadata[:request_id]
+    elapsed = Time.now - request.context[:request_start]
+    response.header "X-Request-Id", request.context[:request_id]
     response.header "X-Response-Time", "#{(elapsed * 1000).round}ms"
   end
 
@@ -952,15 +946,7 @@ end
 
 #### Execution Order
 
-The complete execution order for a request:
-
-1. **Global around blocks** (outermost to innermost)
-2. **Global before blocks** (in registration order)
-3. **Route hierarchy metadata blocks** (parent to child)
-4. **Route hierarchy before blocks** (parent to child)
-5. **Handler**
-6. **Route hierarchy after blocks** (child to parent)
-7. **Global after blocks** (in registration order)
+See the canonical [Request Lifecycle guide](docs/lifecycle.md) for the complete execution order, route hierarchy behavior, `all.rb`, halt behavior, and catchall routes.
 
 Multiple around blocks nest with first registered being outermost:
 

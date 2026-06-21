@@ -12,7 +12,7 @@ RSpec.describe "Path Parameters Integration" do
     # Register a route with path parameters
     file_path = "routes/api/v1/users/$id/get.rb"
 
-    Raxon::RouteLoader.register(file_path) do |endpoint|
+    define_route(file_path) do |endpoint|
       endpoint.description "Get user by ID"
 
       endpoint.handler do |request, response|
@@ -47,7 +47,7 @@ RSpec.describe "Path Parameters Integration" do
   it "extracts multiple path parameters in order" do
     file_path = "routes/api/v1/orgs/$org_id/projects/$project_id/get.rb"
 
-    Raxon::RouteLoader.register(file_path) do |endpoint|
+    define_route(file_path) do |endpoint|
       endpoint.description "Get project by org and project ID"
 
       endpoint.handler do |request, response|
@@ -85,7 +85,7 @@ RSpec.describe "Path Parameters Integration" do
   it "exposes path parameters separately from query parameters" do
     file_path = "routes/api/v1/users/$id/get.rb"
 
-    Raxon::RouteLoader.register(file_path) do |endpoint|
+    define_route(file_path) do |endpoint|
       endpoint.handler do |request, response|
         response.code = :ok
         response.body = {
@@ -111,7 +111,7 @@ RSpec.describe "Path Parameters Integration" do
   it "merges path parameters with query parameters" do
     file_path = "routes/api/v1/users/$id/get.rb"
 
-    Raxon::RouteLoader.register(file_path) do |endpoint|
+    define_route(file_path) do |endpoint|
       endpoint.description "Get user by ID with query params"
       endpoint.handler do |request, response|
         response.code = :ok

@@ -8,7 +8,7 @@ RSpec.describe Raxon::RouteLoader do
     Raxon::RouteLoader.reset!
   end
 
-  describe ".register" do
+  describe ".define" do
     it "registers a route from a file path" do
       file_path = "routes/api/v1/users/get.rb"
       block = proc do |endpoint|
@@ -19,7 +19,7 @@ RSpec.describe Raxon::RouteLoader do
         end
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users")
       expect(route_data).not_to be_nil
@@ -39,7 +39,7 @@ RSpec.describe Raxon::RouteLoader do
         end
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users/123")
       expect(route_data).not_to be_nil
@@ -55,7 +55,7 @@ RSpec.describe Raxon::RouteLoader do
         endpoint.description "Get post by user and post ID"
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users/42/posts/99")
       expect(route_data).not_to be_nil
@@ -74,7 +74,7 @@ RSpec.describe Raxon::RouteLoader do
         end
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users/456")
       expect(route_data).not_to be_nil
@@ -90,7 +90,7 @@ RSpec.describe Raxon::RouteLoader do
         endpoint.description "Get project by org and project ID"
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/orgs/acme/projects/website")
       expect(route_data).not_to be_nil
@@ -105,7 +105,7 @@ RSpec.describe Raxon::RouteLoader do
         endpoint.description "Mixed parameter styles"
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       route_data = Raxon::RouteLoader.routes.find("GET", "/api/v1/users/42/posts/99")
       expect(route_data).not_to be_nil
@@ -118,7 +118,7 @@ RSpec.describe Raxon::RouteLoader do
       invalid_file_path = "routes/api/v1/users/invalid_method.rb"
 
       expect {
-        Raxon::RouteLoader.register(invalid_file_path) do
+        Raxon::RouteLoader.define(invalid_file_path) do
           # no-op
         end
       }.to raise_error(Raxon::Error, /Invalid HTTP method in filename/)
@@ -130,7 +130,7 @@ RSpec.describe Raxon::RouteLoader do
       valid_methods.each do |method|
         file_path = "routes/api/v1/test/#{method.downcase}.rb"
         expect {
-          Raxon::RouteLoader.register(file_path) do
+          Raxon::RouteLoader.define(file_path) do
             # no-op
           end
         }.not_to raise_error
@@ -140,7 +140,7 @@ RSpec.describe Raxon::RouteLoader do
     it "accepts 'all' as a valid method" do
       file_path = "routes/api/v1/test/all.rb"
       expect {
-        Raxon::RouteLoader.register(file_path) do
+        Raxon::RouteLoader.define(file_path) do
           # no-op
         end
       }.not_to raise_error
@@ -159,9 +159,9 @@ RSpec.describe Raxon::RouteLoader do
         end
       end
 
-      Raxon::RouteLoader.register(file_path, &block)
-      Raxon::RouteLoader.register(file_path, &block)
-      Raxon::RouteLoader.register(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
+      Raxon::RouteLoader.define(file_path, &block)
 
       expect(call_count).to eq(1)
     end
@@ -170,7 +170,7 @@ RSpec.describe Raxon::RouteLoader do
       file_path = "routes/api/v1/test/all.rb"
       execution_log = []
 
-      Raxon::RouteLoader.register(file_path) do |endpoint|
+      Raxon::RouteLoader.define(file_path) do |endpoint|
         endpoint.description "Catch-all endpoint"
         endpoint.handler do |request, response|
           execution_log << "all.rb executed for #{request.rack_request.request_method}"
@@ -193,21 +193,21 @@ RSpec.describe Raxon::RouteLoader do
       execution_log = []
 
       # Register an all.rb at /api level
-      Raxon::RouteLoader.register("routes/api/all.rb") do |endpoint|
+      Raxon::RouteLoader.define("routes/api/all.rb") do |endpoint|
         endpoint.handler do |request, response|
           execution_log << "api/all.rb"
         end
       end
 
       # Register an all.rb at /api/v1 level
-      Raxon::RouteLoader.register("routes/api/v1/all.rb") do |endpoint|
+      Raxon::RouteLoader.define("routes/api/v1/all.rb") do |endpoint|
         endpoint.handler do |request, response|
           execution_log << "api/v1/all.rb"
         end
       end
 
       # Register a GET-specific handler at /api/v1/users level
-      Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+      Raxon::RouteLoader.define("routes/api/v1/users/get.rb") do |endpoint|
         endpoint.description "Get users"
         endpoint.handler do |request, response|
           execution_log << "api/v1/users/get.rb"
@@ -246,7 +246,7 @@ RSpec.describe Raxon::RouteLoader do
         FileUtils.mkdir_p(File.join(dir, ".well-known"))
 
         File.write(File.join(dir, ".well-known/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler do |request, response|
               response.code = :ok
               response.body = {path: "/.well-known"}
@@ -275,13 +275,13 @@ RSpec.describe Raxon::RouteLoader do
         FileUtils.mkdir_p(File.join(engine_routes, "engine"))
 
         File.write(File.join(app_routes, "api/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {source: "app"} }
           end
         RUBY
 
         File.write(File.join(engine_routes, "engine/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {source: "engine"} }
           end
         RUBY
@@ -305,7 +305,7 @@ RSpec.describe Raxon::RouteLoader do
 
         [app_routes, engine_routes].each do |routes_dir|
           File.write(File.join(routes_dir, "api/get.rb"), <<~RUBY)
-            Raxon::RouteLoader.register(__FILE__) do |endpoint|
+            Raxon.route do |endpoint|
               endpoint.handler { |request, response| response.body = {} }
             end
           RUBY
@@ -326,7 +326,7 @@ RSpec.describe Raxon::RouteLoader do
         FileUtils.mkdir_p(File.join(nested_routes, "admin"))
 
         File.write(File.join(nested_routes, "admin/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {path: endpoint.path} }
           end
         RUBY
@@ -347,7 +347,7 @@ RSpec.describe Raxon::RouteLoader do
         FileUtils.mkdir_p(routes)
 
         File.write(File.join(routes, "get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {ok: true} }
           end
         RUBY
@@ -380,7 +380,7 @@ RSpec.describe Raxon::RouteLoader do
         Raxon::RouteLoader.reset!
 
         expect {
-          Raxon::RouteLoader.register(outside) { |endpoint| endpoint.handler { |_request, response| response.body = {} } }
+          Raxon::RouteLoader.define(outside) { |endpoint| endpoint.handler { |_request, response| response.body = {} } }
         }.to raise_error(Raxon::Error, /Route file #{Regexp.escape(outside)} is not inside configured routes_directory: #{Regexp.escape(routes)}/)
       end
     end
@@ -395,25 +395,25 @@ RSpec.describe Raxon::RouteLoader do
 
         # Create test files
         File.write(File.join(dir, "api/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {msg: "api/get"} }
           end
         RUBY
 
         File.write(File.join(dir, "api/all.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {msg: "api/all"} }
           end
         RUBY
 
         File.write(File.join(dir, "api/v1/all.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {msg: "api/v1/all"} }
           end
         RUBY
 
         File.write(File.join(dir, "api/v1/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.handler { |request, response| response.body = {msg: "api/v1/get"} }
           end
         RUBY
@@ -451,7 +451,7 @@ RSpec.describe Raxon::RouteLoader do
       require "tmpdir"
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.response 200, type: :object do |r|
               r.property :result, type: :string
             end
@@ -488,7 +488,7 @@ RSpec.describe Raxon::RouteLoader do
 
         # First route defines helper_one
         File.write(File.join(dir, "first/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.response 200, type: :object do |r|
               r.property :result, type: :string
             end
@@ -505,7 +505,7 @@ RSpec.describe Raxon::RouteLoader do
 
         # Second route defines helper_two (and should NOT have access to helper_one)
         File.write(File.join(dir, "second/get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.response 200, type: :object do |r|
               r.property :result, type: :string
             end
@@ -542,7 +542,7 @@ RSpec.describe Raxon::RouteLoader do
       require "tmpdir"
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.response 200, type: :object do |r|
               r.property :value, type: :string
             end
@@ -572,7 +572,7 @@ RSpec.describe Raxon::RouteLoader do
       require "tmpdir"
       Dir.mktmpdir do |dir|
         File.write(File.join(dir, "get.rb"), <<~RUBY)
-          Raxon::RouteLoader.register(__FILE__) do |endpoint|
+          Raxon.route do |endpoint|
             endpoint.response 200, type: :object do |r|
               r.property :authenticated, type: :boolean
             end

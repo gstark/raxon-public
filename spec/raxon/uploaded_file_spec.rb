@@ -33,6 +33,17 @@ RSpec.describe Raxon::UploadedFile do
     end
   end
 
+  describe ".rack_file_hash?" do
+    it "requires a readable tempfile and filename" do
+      tempfile = Tempfile.new("upload")
+
+      expect(described_class.rack_file_hash?(tempfile: "not-io", filename: "photo.jpg")).to be(false)
+      expect(described_class.rack_file_hash?(tempfile: tempfile)).to be(false)
+
+      tempfile.close!
+    end
+  end
+
   describe "IO delegation" do
     it "delegates read, rewind, size, eof?, close, and path to tempfile" do
       tempfile = Tempfile.new("upload")

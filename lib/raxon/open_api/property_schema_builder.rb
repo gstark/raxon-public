@@ -40,7 +40,9 @@ module Raxon
         case field_type
         when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
           :string
-        when "number", "integer"
+        when "number"
+          :float
+        when "integer"
           :integer
         when "boolean"
           :bool
@@ -57,7 +59,9 @@ module Raxon
         case openapi_type
         when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
           "params.string"
-        when "number", "integer"
+        when "number"
+          "params.float"
+        when "integer"
           "params.integer"
         when "boolean"
           "params.bool"
@@ -206,7 +210,7 @@ module Raxon
           constraints[:format?] = Regexp.new(field.pattern.to_s) if field.respond_to?(:pattern) && field.pattern
         end
 
-        if dry_type == :integer
+        if dry_type == :integer || dry_type == :float
           constraints[:gteq?] = field.minimum if field.respond_to?(:minimum) && field.minimum
           constraints[:lteq?] = field.maximum if field.respond_to?(:maximum) && field.maximum
         end

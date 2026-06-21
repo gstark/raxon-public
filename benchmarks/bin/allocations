@@ -1,0 +1,153 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "csv"
+require "fileutils"
+require "optparse"
+
+ROOT = File.expand_path("..", __dir__)
+APP_DIR = File.join(ROOT, "apps", "raxon")
+DEFAULT_ENDPOINTS = {
+  "plaintext" => "/plaintext",
+  "json" => "/json",
+  "path_param" => "/users/123"
+}.freeze
+
+ENV["BUNDLE_GEMFILE"] ||= File.join(ROOT, "Gemfile")
+require "bundler/setup"
+require "rack/mock_request"
+require "raxon"
+
+options = {
+  endpoints: DEFAULT_ENDPOINTS.keys,
+  iterations: 10_000,
+  warmup: 1_000,
+  output: File.join(ROOT, "allocations.csv")
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: ruby benchmarks/bin/allocations [options]"
+
+  opts.on("--endpoints LIST", "Comma-separated endpoints: #{DEFAULT_ENDPOINTS.keys.join(",")}") do |value|
+    options[:endpoints] = value.split(",").map(&:strip)
+  end
+
+  opts.on("-n", "--iterations N", Integer, "measured requests per endpoint (default: #{options[:iterations]})") do |value|
+    options[:iterations] = value
+  end
+
+  opts.on("--warmup N", Integer, "warmup requests per endpoint (default: #{options[:warmup]})") do |value|
+    options[:warmup] = value
+  end
+
+  opts.on("-o", "--output PATH", "CSV output path (default: #{options[:output]})") do |value|
+    options[:output] = value
+  end
+
+  opts.on("-h", "--help", "Print this help") do
+    puts opts
+    exit
+  end
+end
+
+parser.parse!
+
+missing_endpoints = options[:endpoints] - DEFAULT_ENDPOINTS.keys
+unless missing_endpoints.empty?
+  warn "Unknown endpoint(s): #{missing_endpoints.join(", ")}"
+  exit 1
+end
+
+if options[:iterations] <= 0
+  warn "--iterations must be positive"
+  exit 1
+end
+
+if options[:warmup].negative?
+  warn "--warmup must be zero or positive"
+  exit 1
+end
+
+Raxon.configure do |config|
+  config.routes_directory = File.join(APP_DIR, "routes")
+end
+
+Raxon::RouteLoader.reset!
+Raxon::RouteLoader.load!
+app = Raxon::Server.new
+
+FileUtils.mkdir_p(File.dirname(options[:output]))
+
+# Build Rack envs outside the measured window. The benchmark is intended to
+# count allocations made by Raxon while handling an already-created Rack request,
+# not allocations made by the benchmark harness to construct env hashes.
+def prebuild_envs(path, count)
+  Array.new(count) { Rack::MockRequest.env_for(path, method: "GET") }
+end
+
+def call_app(app, env)
+  _status, _headers, body = app.call(env)
+  body.each { |_chunk| } if body.respond_to?(:each)
+  body.close if body.respond_to?(:close)
+end
+
+def allocated_objects_for(app, envs)
+  GC.start(full_mark: true, immediate_sweep: true)
+
+  was_disabled = GC.disable
+  before = GC.stat(:total_allocated_objects)
+  started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+  index = 0
+  count = envs.length
+  while index < count
+    call_app(app, envs[index])
+    index += 1
+  end
+
+  elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+  after = GC.stat(:total_allocated_objects)
+  GC.enable unless was_disabled
+
+  [after - before, elapsed]
+ensure
+  GC.enable unless was_disabled
+end
+
+results = []
+
+options[:endpoints].each do |endpoint_name|
+  path = DEFAULT_ENDPOINTS.fetch(endpoint_name)
+
+  print "warmup #{endpoint_name}... "
+  prebuild_envs(path, options[:warmup]).each { |env| call_app(app, env) }
+  puts "done"
+
+  print "measure #{endpoint_name}... "
+  envs = prebuild_envs(path, options[:iterations])
+  total_allocations, elapsed = allocated_objects_for(app, envs)
+  allocations_per_request = total_allocations.to_f / options[:iterations]
+  puts "#{allocations_per_request.round(2)} objects/request"
+
+  results << {
+    framework: "raxon",
+    endpoint: endpoint_name,
+    path: path,
+    iterations: options[:iterations],
+    total_allocated_objects: total_allocations,
+    allocated_objects_per_request: allocations_per_request,
+    elapsed_seconds: elapsed
+  }
+end
+
+CSV.open(options[:output], "w") do |csv|
+  csv << %w[framework endpoint path iterations total_allocated_objects allocated_objects_per_request elapsed_seconds]
+  results.each do |row|
+    csv << [
+      row[:framework], row[:endpoint], row[:path], row[:iterations],
+      row[:total_allocated_objects], row[:allocated_objects_per_request], row[:elapsed_seconds]
+    ]
+  end
+end
+
+puts "\nWrote #{options[:output]}"

@@ -459,11 +459,11 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
       expect(generator.map_type_to_dry("string")).to eq("params.string")
     end
 
-    it "maps number type to integer" do
+    it "maps number type to float" do
       response = Raxon::OpenApi::Response.new(type: :object)
       generator = described_class.new(response)
 
-      expect(generator.map_type_to_dry("number")).to eq("params.integer")
+      expect(generator.map_type_to_dry("number")).to eq("params.float")
     end
 
     it "maps boolean type" do

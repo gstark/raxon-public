@@ -12,7 +12,7 @@ RSpec.describe "Single request object per request lifecycle" do
     it "passes the same Raxon::Request object instance to before and handler" do
       request_objects = []
 
-      Raxon::RouteLoader.register("routes/api/v1/test/get.rb") do |endpoint|
+      define_route("routes/api/v1/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object
         endpoint.before do |request, _response|
           request_objects << request.object_id
@@ -38,14 +38,14 @@ RSpec.describe "Single request object per request lifecycle" do
       request_objects = []
 
       # Register parent route with before block
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.before do |request, _response|
           request_objects << request.object_id
         end
       end
 
       # Register child route with before block and handler
-      Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+      define_route("routes/api/v1/users/get.rb") do |endpoint|
         endpoint.response 200, type: :array
         endpoint.before do |request, _response|
           request_objects << request.object_id
@@ -69,21 +69,21 @@ RSpec.describe "Single request object per request lifecycle" do
       request_objects = []
 
       # Level 1: /api
-      Raxon::RouteLoader.register("routes/api/get.rb") do |endpoint|
+      define_route("routes/api/get.rb") do |endpoint|
         endpoint.before do |request, _response|
           request_objects << request.object_id
         end
       end
 
       # Level 2: /api/v1
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.before do |request, _response|
           request_objects << request.object_id
         end
       end
 
       # Level 3: /api/v1/users
-      Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+      define_route("routes/api/v1/users/get.rb") do |endpoint|
         endpoint.response 200, type: :array
         endpoint.before do |request, _response|
           request_objects << request.object_id
@@ -104,13 +104,13 @@ RSpec.describe "Single request object per request lifecycle" do
     end
 
     it "allows request state modification in before block to be accessible in handler" do
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.before do |request, _response|
           request.instance_variable_set(:@custom_state, "parent_value")
         end
       end
 
-      Raxon::RouteLoader.register("routes/api/v1/test/get.rb") do |endpoint|
+      define_route("routes/api/v1/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object
         endpoint.before do |request, _response|
           request.instance_variable_set(:@child_state, "child_value")

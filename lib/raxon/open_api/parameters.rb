@@ -9,8 +9,8 @@ module Raxon
     #
     # @example
     #   parameters = Parameters.new
-    #   parameters.define :id, type: :string, in: :path
-    #   parameters.define :limit, type: :number, in: :query, required: false
+    #   parameters.define :id, type: :string, in: :path # required by default
+    #   parameters.define :limit, type: :number, in: :query # optional by default
     #
     class Parameters
       attr_reader :parameters
@@ -27,7 +27,7 @@ module Raxon
       #
       # @example
       #   define :user_id, type: :string, in: :path, description: "User identifier"
-      #   define :page, type: :number, in: :query, required: false, description: "Page number"
+      #   define :page, type: :number, in: :query, description: "Page number"
       def define(name, options, &block)
         parameter = Parameter.new(name, **options)
         yield parameter if block_given?

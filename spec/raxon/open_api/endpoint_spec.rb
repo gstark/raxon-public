@@ -191,6 +191,19 @@ RSpec.describe Raxon::OpenApi::Endpoint do
 
       expect(endpoint.body).to eq(endpoint.request_body)
     end
+
+    it "invalidates the memoized request schema when request body changes" do
+      endpoint = described_class.new
+      endpoint.query_param :name, type: :string, required: true
+      expect(endpoint.request_schema.call(name: "Ada")).to be_success
+
+      endpoint.request_body type: :object do |body|
+        body.property :age, type: :integer
+      end
+
+      result = endpoint.request_schema.call(name: "Ada")
+      expect(result.errors.to_h).to include(:age)
+    end
   end
 
   describe "#response" do
@@ -205,6 +218,17 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "yields the response object" do
       endpoint = described_class.new
       expect { |b| endpoint.response(200, type: :object, &b) }.to yield_with_args(an_instance_of(Raxon::OpenApi::Response))
+    end
+
+    it "invalidates the memoized response schemas when responses change" do
+      endpoint = described_class.new
+      expect(endpoint.response_schemas).to eq({})
+
+      endpoint.response 200, type: :object do |response|
+        response.property :success, type: :boolean
+      end
+
+      expect(endpoint.response_schemas).to include(200)
     end
   end
 
@@ -324,7 +348,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "executes the before block before the handler" do
       call_order = []
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response(200, type: :object)
         endpoint.before do |request, response|
           call_order << :before
@@ -343,7 +367,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     end
 
     it "allows the before block to access the request" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.operation(:get)
         endpoint.before do |request, response|
           response.rack_response["X-Method"] = request.method
@@ -363,7 +387,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "executes multiple before blocks in the order they were defined" do
       execution_order = []
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.operation(:get)
         endpoint.before do |request, response|
           execution_order << :first
@@ -430,7 +454,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "executes multiple after blocks in the order they were defined" do
       execution_order = []
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.operation(:get)
         endpoint.after do |request, response|
           execution_order << :first
@@ -497,7 +521,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "passes metadata to the handler as the third argument" do
       received_metadata = nil
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.metadata do |request, response, metadata|
           metadata[:x] = 42
         end
@@ -517,7 +541,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "executes multiple metadata blocks in order, with later values overriding" do
       received_metadata = nil
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.metadata do |request, response, metadata|
           metadata[:value] = "first"
           metadata[:only_first] = true
@@ -544,7 +568,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "allows metadata blocks to access request information" do
       received_metadata = nil
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.metadata do |request, response, metadata|
           metadata[:method] = request.method
         end
@@ -599,7 +623,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     it "executes before block without handler" do
       before_called = false
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.before do |request, response|
           before_called = true
           response.rack_response["X-Before"] = "executed"
@@ -614,7 +638,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
     end
 
     it "returns empty response if no handler and no before block" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response(200, type: :object)
       end
 

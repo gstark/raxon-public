@@ -92,10 +92,7 @@ module Raxon
       # @param value [Object]
       # @return [Object, Raxon::UploadedFile]
       def coerce_file(value)
-        return value if value.is_a?(Raxon::UploadedFile)
-        return value unless Raxon::UploadedFile.rack_file_hash?(value)
-
-        Raxon::UploadedFile.new(value)
+        Raxon::UploadedFile.normalize(value) || value
       end
 
       # Recursively coerce an object property's nested properties.

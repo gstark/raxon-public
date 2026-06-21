@@ -1,0 +1,259 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "csv"
+require "fileutils"
+require "net/http"
+require "optparse"
+require "socket"
+require "timeout"
+
+ROOT = File.expand_path("..", __dir__)
+APPS_DIR = File.join(ROOT, "apps")
+LOG_DIR = File.join(ROOT, "tmp")
+DEFAULT_FRAMEWORKS = %w[rack roda sinatra raxon zap].freeze
+DEFAULT_ENDPOINTS = {
+  "plaintext" => "/plaintext",
+  "json" => "/json",
+  "path_param" => "/users/123"
+}.freeze
+
+options = {
+  frameworks: DEFAULT_FRAMEWORKS,
+  endpoints: DEFAULT_ENDPOINTS.keys,
+  threads: 4,
+  connections: 100,
+  duration: "30s",
+  port: 9292,
+  warmup: "5s",
+  output: File.join(ROOT, "results.csv")
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: ruby benchmarks/bin/run [options]"
+
+  opts.on("--frameworks LIST", "Comma-separated frameworks: #{DEFAULT_FRAMEWORKS.join(",")}") do |value|
+    options[:frameworks] = value.split(",").map(&:strip)
+  end
+
+  opts.on("--endpoints LIST", "Comma-separated endpoints: #{DEFAULT_ENDPOINTS.keys.join(",")}") do |value|
+    options[:endpoints] = value.split(",").map(&:strip)
+  end
+
+  opts.on("-t", "--threads N", Integer, "wrk threads (default: #{options[:threads]})") { |value| options[:threads] = value }
+  opts.on("-c", "--connections N", Integer, "wrk connections (default: #{options[:connections]})") { |value| options[:connections] = value }
+  opts.on("-d", "--duration VALUE", "wrk duration (default: #{options[:duration]})") { |value| options[:duration] = value }
+  opts.on("--warmup VALUE", "warmup duration per endpoint (default: #{options[:warmup]})") { |value| options[:warmup] = value }
+  opts.on("-p", "--port PORT", Integer, "port to run apps on (default: #{options[:port]})") { |value| options[:port] = value }
+  opts.on("-o", "--output PATH", "CSV output path (default: #{options[:output]})") { |value| options[:output] = value }
+  opts.on("-h", "--help", "Print this help") do
+    puts opts
+    exit
+  end
+end
+
+parser.parse!
+
+missing_frameworks = options[:frameworks] - DEFAULT_FRAMEWORKS
+unless missing_frameworks.empty?
+  warn "Unknown framework(s): #{missing_frameworks.join(", ")}"
+  exit 1
+end
+
+missing_endpoints = options[:endpoints] - DEFAULT_ENDPOINTS.keys
+unless missing_endpoints.empty?
+  warn "Unknown endpoint(s): #{missing_endpoints.join(", ")}"
+  exit 1
+end
+
+wrk = ENV.fetch("WRK", "wrk")
+unless system("command -v #{wrk} >/dev/null 2>&1")
+  warn "wrk is required. Install it first, e.g. `brew install wrk`, or set WRK=/path/to/wrk."
+  exit 1
+end
+
+gemfile = File.join(ROOT, "Gemfile")
+if (options[:frameworks] - ["zap"]).any?
+  unless system({"BUNDLE_GEMFILE" => gemfile}, "bundle", "check", chdir: ROOT, out: File::NULL, err: File::NULL)
+    warn "Benchmark gems are not installed. Run:"
+    warn "  cd benchmarks && bundle install"
+    exit 1
+  end
+end
+
+FileUtils.mkdir_p(LOG_DIR)
+
+server_pid = nil
+
+stop_server = lambda do
+  next unless server_pid
+
+  pgid = server_pid
+
+  begin
+    Process.kill("TERM", -pgid)
+  rescue Errno::ESRCH, Errno::EPERM
+    begin
+      Process.kill("TERM", server_pid)
+    rescue
+      nil
+    end
+  end
+
+  begin
+    Timeout.timeout(2) { Process.wait(server_pid) }
+  rescue Timeout::Error, Errno::ECHILD
+  end
+
+  # Some servers fork worker processes that can outlive the parent. Make sure the
+  # whole process group is gone before starting the next benchmark.
+  begin
+    Process.kill(0, -pgid)
+    Process.kill("KILL", -pgid)
+  rescue Errno::ESRCH, Errno::EPERM
+  end
+
+  begin
+    Process.wait(server_pid)
+  rescue
+    nil
+  end
+  server_pid = nil
+end
+
+trap("INT") do
+  stop_server.call
+  exit 130
+end
+trap("TERM") do
+  stop_server.call
+  exit 143
+end
+
+def port_open?(port)
+  Socket.tcp("127.0.0.1", port, connect_timeout: 0.2) { |socket| socket.close }
+  true
+rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH, SocketError, IOError
+  false
+end
+
+def wait_for_server(port, pid)
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 15
+
+  loop do
+    return true if port_open?(port)
+
+    _, status = Process.waitpid2(pid, Process::WNOHANG)
+    raise "server exited before binding port #{port} with status #{status.exitstatus}" if status
+    raise "server did not start on port #{port}" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+    sleep 0.1
+  end
+end
+
+def run_wrk(wrk, threads:, connections:, duration:, url:)
+  command = [wrk, "-t#{threads}", "-c#{connections}", "-d#{duration}", url]
+  output = IO.popen(command, err: [:child, :out], &:read)
+  status = $?
+  raise "wrk failed for #{url}:\n#{output}" unless status.success?
+
+  output
+end
+
+def parse_wrk(output)
+  requests_per_sec = output[/Requests\/sec:\s+([0-9.]+)/, 1]&.to_f
+  transfer_per_sec = output[/Transfer\/sec:\s+([^\n]+)/, 1]&.strip
+  latency_avg = output[/Latency\s+([0-9.]+\w+)/, 1]
+  latency_stdev = output[/Latency\s+[0-9.]+\w+\s+([0-9.]+\w+)/, 1]
+
+  {
+    requests_per_sec: requests_per_sec,
+    latency_avg: latency_avg,
+    latency_stdev: latency_stdev,
+    transfer_per_sec: transfer_per_sec
+  }
+end
+
+def start_framework(framework, app_dir, gemfile, port, log)
+  if framework == "zap"
+    system("zig", "build", "-Drelease=true", chdir: app_dir) || raise("failed to build Zap benchmark app")
+
+    Process.spawn(
+      {"PORT" => port.to_s},
+      File.join(app_dir, "zig-out", "bin", "zap-benchmark"),
+      chdir: app_dir,
+      out: log,
+      err: log,
+      pgroup: true
+    )
+  else
+    Process.spawn(
+      {"BUNDLE_GEMFILE" => gemfile, "RACK_ENV" => "production"},
+      "bundle", "exec", "rackup", "config.ru", "--host", "127.0.0.1", "--port", port.to_s,
+      chdir: app_dir,
+      out: log,
+      err: log,
+      pgroup: true
+    )
+  end
+end
+
+results = []
+
+options[:frameworks].each do |framework|
+  app_dir = File.join(APPS_DIR, framework)
+  log_path = File.join(LOG_DIR, "#{framework}.log")
+  File.write(log_path, "")
+
+  if port_open?(options[:port])
+    warn "Port #{options[:port]} is already in use. Stop the existing process or pass --port."
+    exit 1
+  end
+
+  puts "\n==> Starting #{framework} on port #{options[:port]}"
+  log = File.open(log_path, "a")
+  server_pid = start_framework(framework, app_dir, gemfile, options[:port], log)
+
+  begin
+    wait_for_server(options[:port], server_pid)
+
+    options[:endpoints].each do |endpoint_name|
+      path = DEFAULT_ENDPOINTS.fetch(endpoint_name)
+      url = "http://127.0.0.1:#{options[:port]}#{path}"
+
+      print "  warmup #{endpoint_name}... "
+      run_wrk(wrk, threads: 1, connections: [options[:connections], 10].min, duration: options[:warmup], url: url)
+      puts "done"
+
+      print "  benchmark #{endpoint_name}... "
+      output = run_wrk(wrk, threads: options[:threads], connections: options[:connections], duration: options[:duration], url: url)
+      metrics = parse_wrk(output)
+      puts "#{metrics[:requests_per_sec]&.round(2)} req/s, avg latency #{metrics[:latency_avg]}"
+
+      results << {
+        framework: framework,
+        endpoint: endpoint_name,
+        url: url,
+        threads: options[:threads],
+        connections: options[:connections],
+        duration: options[:duration],
+        **metrics
+      }
+    end
+  ensure
+    stop_server.call
+    log.close
+  end
+end
+
+CSV.open(options[:output], "w") do |csv|
+  csv << %w[framework endpoint url threads connections duration requests_per_sec latency_avg latency_stdev transfer_per_sec]
+  results.each do |row|
+    csv << [
+      row[:framework], row[:endpoint], row[:url], row[:threads], row[:connections], row[:duration],
+      row[:requests_per_sec], row[:latency_avg], row[:latency_stdev], row[:transfer_per_sec]
+    ]
+  end
+end
+
+puts "\nWrote #{options[:output]}"

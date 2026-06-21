@@ -249,6 +249,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     it "includes schema metadata in the OpenAPI specification" do
       described_class.component("User", type: :object) do |user|
         user.property(:email, type: :string, format: :email, example: "user@example.com", default: "unknown@example.com", min_length: 3, max_length: 255, pattern: "^[^@]+@[^@]+$")
+        user.property(:username, type: :string, pattern: /^[a-z]+$/)
         user.property(:age, type: :integer, minimum: 0, maximum: 130)
         user.property(:tags, type: :array, of: :string, min_items: 1, max_items: 5, unique_items: true)
         user.property(:scores, type: :array, of: :integer)
@@ -266,6 +267,7 @@ RSpec.describe Raxon::OpenApi::DSL do
         "maxLength" => 255,
         "pattern" => "^[^@]+@[^@]+$"
       )
+      expect(properties["username"]).to include("pattern" => "^[a-z]+$")
       expect(properties["age"]).to include(
         "type" => "integer",
         "minimum" => 0,
@@ -783,7 +785,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "validates successful response body" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
         end
@@ -803,7 +805,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "returns 500 when response validation fails" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
           response.property :id, type: :number, required: true
@@ -828,7 +830,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     it "hides response validation details when configured" do
       Raxon.configure { |config| config.expose_validation_details = false }
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
           response.property :id, type: :integer, required: true
@@ -850,7 +852,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     it "skips response validation when configured false" do
       Raxon.configure { |config| config.response_validation = false }
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
           response.property :id, type: :integer, required: true
@@ -873,7 +875,7 @@ RSpec.describe Raxon::OpenApi::DSL do
         config.expose_validation_details = false
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
           response.property :id, type: :integer, required: true
@@ -894,7 +896,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     it "raises response validation failures when configured to raise" do
       Raxon.configure { |config| config.response_validation = :raise }
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
           response.property :id, type: :integer, required: true
@@ -911,7 +913,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "allows endpoints to disable response validation" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.validate_response false
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
@@ -932,7 +934,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     it "allows endpoints to force response validation when global validation is disabled" do
       Raxon.configure { |config| config.response_validation = false }
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.validate_response true
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
@@ -951,7 +953,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "skips validation when no schema defined for status code" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object
 
         endpoint.handler do |request, response|
@@ -969,7 +971,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "validates nested object responses" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :status, type: :string, required: true
           response.property :data, type: :object, required: true do |data|
@@ -1005,7 +1007,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "validates array responses with inline item properties" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :array do |response|
           response.property :id, type: :number, required: true
           response.property :name, type: :string, required: true
@@ -1029,7 +1031,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "returns 500 when array response item validation fails" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :array do |response|
           response.property :id, type: :number, required: true
           response.property :name, type: :string, required: true
@@ -1052,7 +1054,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "fails validation when nested properties are missing" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.response 200, type: :object do |response|
           response.property :data, type: :object, required: true do |data|
             data.property :name, type: :string, required: true

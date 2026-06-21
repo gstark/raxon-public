@@ -48,23 +48,23 @@ module Raxon
       if route_data.nil?
         # Try catchall endpoint first
         if Raxon::RouteLoader.catchall
-          debug_log "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, using catchall"
+          debug_log { "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, using catchall" }
           return execute_catchall(env, rack_request)
         end
 
         # If a fallback app is configured, delegate to it for unmatched routes
         if fallback
-          debug_log "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, delegating to fallback"
+          debug_log { "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, delegating to fallback" }
           result = fallback.call(env)
-          debug_log "[Raxon] Fallback returned: status=#{result[0]}, headers=#{result[1].inspect}, body_class=#{result[2].class}"
+          debug_log { "[Raxon] Fallback returned: status=#{result[0]}, headers=#{result[1].inspect}, body_class=#{result[2].class}" }
           return result
         else
-          debug_log "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, no fallback configured, returning 404"
+          debug_log { "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, no fallback configured, returning 404" }
           return not_found_response
         end
       end
 
-      debug_log "[Raxon] Route matched: #{rack_request.request_method} #{rack_request.path} -> #{route_data[:endpoint].route_file_path}"
+      debug_log { "[Raxon] Route matched: #{rack_request.request_method} #{rack_request.path} -> #{route_data[:endpoint].route_file_path}" }
 
       # Set route params in env for Request to access
       if route_data[:params]
@@ -90,16 +90,16 @@ module Raxon
       end
 
       rack_response = wrapper_response.to_rack
-      debug_log "[Raxon] Returning: status=#{rack_response[0]}, headers=#{rack_response[1].inspect}"
+      debug_log { "[Raxon] Returning: status=#{rack_response[0]}, headers=#{rack_response[1].inspect}" }
       rack_response
     end
 
     private
 
-    def debug_log(message)
+    def debug_log
       return unless ENV["RAXON_DEBUG"]
 
-      warn message
+      warn yield
     end
 
     # Executes a request with global before/after/around blocks wrapping the route hierarchy.
@@ -119,42 +119,14 @@ module Raxon
     # @param endpoints [Array<Raxon::OpenApi::Endpoint>] The endpoint hierarchy (parent to child)
     def execute_request(request, response, handler_endpoint, endpoints)
       config = Raxon.configuration
-      metadata = {}
-
-      # Build the core execution as a proc
-      core_execution = proc do
-        # Execute global before blocks
-        config.before_blocks.each do |before_block|
-          before_block.call(request, response, metadata)
-        end
-
-        # Execute route hierarchy
-        execute_with_hierarchy(request, response, handler_endpoint, endpoints, metadata)
-
-        # Execute global after blocks
-        config.after_blocks.each do |after_block|
-          after_block.call(request, response, metadata)
-        end
-      end
-
-      # Wrap with around blocks (first registered is outermost)
-      wrapped_execution = config.around_blocks.reverse.reduce(core_execution) do |inner, around_block|
-        proc { around_block.call(request, response, metadata, &inner) }
-      end
-
-      # Wrap with instrumentation if enabled
-      instrumented_execution = if config.rails_compatible_instrumentation
-        proc do
-          Instrumentation.instrument_request(request, response, handler_endpoint) do
-            wrapped_execution.call
-          end
-        end
-      else
-        wrapped_execution
-      end
+      metadata = request.metadata
 
       begin
-        instrumented_execution.call
+        if config.around_blocks.empty? && !config.rails_compatible_instrumentation
+          execute_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
+        else
+          execute_wrapped_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
+        end
       rescue Raxon::HaltException
         raise # Let HaltException propagate (flow control)
       rescue => exception
@@ -164,6 +136,41 @@ module Raxon
         else
           raise # Propagate to ErrorHandler middleware
         end
+      end
+    end
+
+    def execute_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
+      # Execute global before blocks
+      config.before_blocks.each do |before_block|
+        before_block.call(request, response, metadata)
+      end
+
+      # Execute route hierarchy
+      execute_with_hierarchy(request, response, handler_endpoint, endpoints, metadata)
+
+      # Execute global after blocks
+      config.after_blocks.each do |after_block|
+        after_block.call(request, response, metadata)
+      end
+    end
+
+    def execute_wrapped_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
+      core_execution = proc do
+        execute_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
+      end
+
+      # Wrap with around blocks (first registered is outermost)
+      wrapped_execution = config.around_blocks.reverse.reduce(core_execution) do |inner, around_block|
+        proc { around_block.call(request, response, metadata, &inner) }
+      end
+
+      # Wrap with instrumentation if enabled
+      if config.rails_compatible_instrumentation
+        Instrumentation.instrument_request(request, response, handler_endpoint) do
+          wrapped_execution.call
+        end
+      else
+        wrapped_execution.call
       end
     end
 
@@ -222,7 +229,7 @@ module Raxon
       end
 
       rack_response = wrapper_response.to_rack
-      debug_log "[Raxon] Catchall returning: status=#{rack_response[0]}, headers=#{rack_response[1].inspect}"
+      debug_log { "[Raxon] Catchall returning: status=#{rack_response[0]}, headers=#{rack_response[1].inspect}" }
       rack_response
     end
 

@@ -30,7 +30,11 @@ module Raxon
       @body_params = nil
       @form_params = nil
       @json_parse_error = false
-      @endpoint_contexts = {}
+      @metadata = {}
+      @context = nil
+      @endpoint_context_endpoint = nil
+      @endpoint_context = nil
+      @endpoint_contexts = nil
     end
 
     # Get or create a context instance for an endpoint.
@@ -43,14 +47,45 @@ module Raxon
     # @param endpoint [Raxon::OpenApi::Endpoint] The endpoint to get context for
     # @return [Object, nil] The context instance, or nil if endpoint has no route context
     def endpoint_context(endpoint)
-      @endpoint_contexts[endpoint] ||= endpoint.create_context_instance
+      if @endpoint_contexts
+        @endpoint_contexts[endpoint] ||= endpoint.create_context_instance
+      elsif @endpoint_context_endpoint.nil? || @endpoint_context_endpoint.equal?(endpoint)
+        @endpoint_context_endpoint = endpoint
+        @endpoint_context ||= endpoint.create_context_instance
+      else
+        @endpoint_contexts = {
+          @endpoint_context_endpoint => @endpoint_context,
+          endpoint => endpoint.create_context_instance
+        }
+        @endpoint_contexts[endpoint]
+      end
+    end
+
+    # Get request-scoped application context.
+    #
+    # Lazily wraps the metadata hash so simple handlers that never access
+    # request.context avoid allocating a RequestContext object.
+    #
+    # @return [RequestContext]
+    def context
+      @context ||= RequestContext.new(@metadata)
+    end
+
+    # Backing hash for the legacy metadata handler argument.
+    #
+    # @return [Hash]
+    def metadata
+      @metadata
     end
 
     # Get path parameters extracted by the router from dynamic route segments.
     #
     # @return [Hash] Path parameters with symbol keys
     def path_params
-      @path_params ||= (@rack_request.env["router.params"] || {}).symbolize_keys
+      @path_params ||= begin
+        params = @rack_request.env["router.params"]
+        params ? symbolize_params(params) : {}
+      end
     end
 
     # Get query string parameters only.
@@ -111,6 +146,10 @@ module Raxon
     def params
       return @validated_params if @validated_params
 
+      if simple_get_without_validation?
+        return @validated_params = path_params
+      end
+
       # Parse JSON body FIRST before accessing form params
       # (accessing form params can consume the body stream)
       json_body = body_params
@@ -119,10 +158,11 @@ module Raxon
       return @validated_params if @json_parse_error
 
       # Assemble all parameters from different sources
-      base_params = assemble_params(json_body)
+      raw_params = assemble_params(json_body)
+      validation_params = assemble_validation_params(json_body)
 
       # Validate and store parameters
-      validate_and_store_params(base_params)
+      validate_and_store_params(validation_params, raw_params)
 
       @validated_params
     end
@@ -163,11 +203,73 @@ module Raxon
     # @return [Hash] Merged parameters
     #
     # @private
+    def simple_get_without_validation?
+      return false unless @endpoint && @endpoint.request_schema.nil? && @endpoint.request_body.nil?
+      return false unless @rack_request.get? || @rack_request.head?
+      return false unless @rack_request.query_string.empty?
+
+      content_length = @rack_request.get_header("CONTENT_LENGTH")
+      content_length.nil? || content_length == "" || content_length == "0"
+    end
+
     def assemble_params(json_body)
       query_params
         .merge(form_params)
         .merge(json_body)
         .merge(path_params)
+    end
+
+    # Build the source-specific parameter hash used for request validation.
+    #
+    # OpenAPI parameters carry an `in:` location. Validation must read those
+    # values from their declared source so a query/body value cannot satisfy a
+    # required header, cookie, or path parameter with the same name.
+    #
+    # Request body properties are still top-level because request bodies are
+    # modeled separately from OpenAPI parameters in the endpoint schema.
+    #
+    # @param json_body [Hash] Parsed JSON body params
+    # @return [Hash] Source-specific parameters for schema validation
+    #
+    # @private
+    def assemble_validation_params(json_body)
+      params = assemble_params(json_body)
+      return params unless @endpoint
+
+      @endpoint.parameters.parameters.each do |parameter|
+        next if parameter.in.to_sym == :query
+
+        key = parameter.name.to_sym
+        params.delete(key)
+        value = parameter_value_from_source(parameter)
+        params[key] = value unless value.nil?
+      end
+
+      params
+    end
+
+    def parameter_value_from_source(parameter)
+      case parameter.in.to_sym
+      when :path
+        path_params[parameter.name.to_sym]
+      when :query
+        query_params[parameter.name.to_sym]
+      when :header
+        header_param_value(parameter.name)
+      when :cookie
+        cookies[parameter.name.to_s]
+      else
+        assemble_params(body_params)[parameter.name.to_sym]
+      end
+    end
+
+    def header_param_value(name)
+      rack_key = "HTTP_#{name.to_s.upcase.tr("-", "_")}"
+      @rack_request.get_header(rack_key) || headers_hash[header_name(name)]
+    end
+
+    def header_name(name)
+      name.to_s.tr("_", "-").split("-").map(&:capitalize).join("-")
     end
 
     # Validate assembled parameters and store the result.
@@ -179,20 +281,20 @@ module Raxon
     # @return [void]
     #
     # @private
-    def validate_and_store_params(base_params)
+    def validate_and_store_params(validation_params, raw_params = validation_params)
       if @endpoint&.request_schema
-        result = @endpoint.request_schema.call(base_params)
+        result = @endpoint.request_schema.call(validation_params)
         if result.success?
           @validated_params = result.to_h
         else
           @validation_errors = result.errors.to_h
-          @validated_params = base_params
+          @validated_params = raw_params
         end
       else
-        @validated_params = base_params
+        @validated_params = raw_params
       end
 
-      coerce_request_body_params
+      coerce_request_body_params if @endpoint&.request_body
     end
 
     # Coerce request body params according to the endpoint's request body definition.
@@ -517,6 +619,14 @@ module Raxon
     # @return [Boolean] true for URL-encoded or multipart form requests
     #
     # @private
+    def symbolize_params(params)
+      params.each_key do |key|
+        return params.symbolize_keys unless key.is_a?(Symbol)
+      end
+
+      params
+    end
+
     def form_content_type?
       content_type&.include?("application/x-www-form-urlencoded") || content_type&.include?("multipart/form-data")
     end

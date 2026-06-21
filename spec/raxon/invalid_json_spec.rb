@@ -4,7 +4,7 @@ require "spec_helper"
 
 RSpec.describe "Invalid JSON handling" do
   it "returns 400 Bad Request when invalid JSON is sent with application/json content type" do
-    Raxon::RouteLoader.register("routes/test/post.rb") do |endpoint|
+    define_route("routes/test/post.rb") do |endpoint|
       endpoint.parameters do |params|
         params.define :name, type: :string, required: true
       end
@@ -32,7 +32,7 @@ RSpec.describe "Invalid JSON handling" do
   end
 
   it "does not return 400 for valid JSON" do
-    Raxon::RouteLoader.register("routes/test/post.rb") do |endpoint|
+    define_route("routes/test/post.rb") do |endpoint|
       endpoint.parameters do |params|
         params.define :name, type: :string, required: true
       end
@@ -55,7 +55,7 @@ RSpec.describe "Invalid JSON handling" do
   end
 
   it "does not return 400 for empty JSON body" do
-    Raxon::RouteLoader.register("routes/test/post.rb") do |endpoint|
+    define_route("routes/test/post.rb") do |endpoint|
       endpoint.parameters do |params|
         params.define :name, type: :string, required: false
       end
@@ -77,7 +77,7 @@ RSpec.describe "Invalid JSON handling" do
   end
 
   it "does not return 400 when content type is not application/json" do
-    Raxon::RouteLoader.register("routes/test/post.rb") do |endpoint|
+    define_route("routes/test/post.rb") do |endpoint|
       endpoint.handler do |request, response|
         response.code = :ok
         response.body = {success: true}

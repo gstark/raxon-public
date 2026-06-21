@@ -115,7 +115,7 @@ RSpec.describe "Automatic validation error responses" do
     context "with endpoint without validation" do
       it "executes handler normally without validation" do
         # Create a simple endpoint without parameter validation
-        Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+        define_route("routes/test/get.rb") do |endpoint|
           endpoint.handler do |request, response|
             response.code = :ok
             response.body = {message: "No validation"}

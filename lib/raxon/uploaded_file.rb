@@ -22,11 +22,22 @@ module Raxon
     def_delegators :tempfile, :read, :rewind, :size, :eof?, :close, :path
 
     def self.rack_file_hash?(value)
-      value.is_a?(Hash) && (value.key?(:tempfile) || value.key?("tempfile"))
+      return false unless value.is_a?(Hash)
+
+      tempfile = value[:tempfile] || value["tempfile"]
+      filename = value[:filename] || value["filename"]
+      tempfile.respond_to?(:read) && tempfile.respond_to?(:rewind) && !!filename && !filename.to_s.empty?
+    end
+
+    def self.normalize(value)
+      return value if value.is_a?(self)
+      return nil unless rack_file_hash?(value)
+
+      new(value)
     end
 
     def self.valid_upload?(value)
-      value.is_a?(self) || rack_file_hash?(value)
+      !normalize(value).nil?
     end
 
     def initialize(hash)

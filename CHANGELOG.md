@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved error messages for validation failures
 - Better security practices throughout codebase
 
+### Removed
+
+- `Raxon::RouteLoader.register(__FILE__)` route registration interface. Route
+  files now use the `Raxon.route` shorthand, which infers the path from the
+  route file location.
+
 ### Security
 
 - Prevent information disclosure in error responses

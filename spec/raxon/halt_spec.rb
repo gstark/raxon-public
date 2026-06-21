@@ -6,7 +6,7 @@ RSpec.describe "Response#halt" do
       before_block_called = false
       handler_called = false
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.before do |request, response|
           before_block_called = true
           response.code = :unauthorized
@@ -33,7 +33,7 @@ RSpec.describe "Response#halt" do
       before_block_called = false
       handler_called = false
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.before do |request, response|
           before_block_called = true
           response.rack_response["X-Custom-Header"] = "test"
@@ -148,7 +148,7 @@ RSpec.describe "Response#halt" do
     it "halts but handler has already run" do
       handler_called = false
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response|
           handler_called = true
           response.code = :ok

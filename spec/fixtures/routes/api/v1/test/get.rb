@@ -1,4 +1,4 @@
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Test endpoint for specs"
 
   endpoint.response 200, type: :object do |response|

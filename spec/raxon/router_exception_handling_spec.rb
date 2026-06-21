@@ -20,7 +20,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise ArgumentError, "Invalid argument"
         end
@@ -51,7 +51,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise ArgumentError, "test"
         end
@@ -79,7 +79,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise custom_error_class, "Custom error"
         end
@@ -102,7 +102,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise StandardError, "Test error message"
         end
@@ -126,7 +126,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise StandardError, "test"
         end
@@ -150,7 +150,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise StandardError, "test"
         end
@@ -175,7 +175,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise StandardError, "test"
         end
@@ -195,7 +195,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise "Not an ArgumentError"
         end
@@ -219,7 +219,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.before do |request, response, metadata|
           raise StandardError, "Before block error"
         end
@@ -248,7 +248,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           response.code = :ok
           response.body = {success: true}
@@ -281,7 +281,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           response.code = :ok
           response.body = {success: true}
@@ -307,7 +307,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.before do |request, response, metadata|
           response.code = :forbidden
           response.body = {error: "Forbidden"}
@@ -335,7 +335,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise ArgumentError, "Original error"
         end
@@ -355,7 +355,7 @@ RSpec.describe "Raxon::Router exception handling" do
         end
       end
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response, metadata|
           raise ArgumentError, "original"
         end

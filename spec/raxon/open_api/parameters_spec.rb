@@ -22,11 +22,39 @@ RSpec.describe Raxon::OpenApi::Parameters do
       expect(parameter.required).to be true
     end
 
-    it "sets required to false when specified" do
-      parameters.define(:filter, in: :query, type: :string, required: false)
+    it "defaults query parameters to optional" do
+      parameters.define(:page, in: :query, type: :integer)
       parameter = parameters.parameters.first
 
       expect(parameter.required).to be false
+    end
+
+    it "defaults header parameters to optional" do
+      parameters.define(:authorization, in: :header, type: :string)
+      parameter = parameters.parameters.first
+
+      expect(parameter.required).to be false
+    end
+
+    it "defaults cookie parameters to optional" do
+      parameters.define(:session_id, in: :cookie, type: :string)
+      parameter = parameters.parameters.first
+
+      expect(parameter.required).to be false
+    end
+
+    it "sets required to false when specified" do
+      parameters.define(:id, in: :path, type: :string, required: false)
+      parameter = parameters.parameters.first
+
+      expect(parameter.required).to be false
+    end
+
+    it "sets required to true when specified" do
+      parameters.define(:filter, in: :query, type: :string, required: true)
+      parameter = parameters.parameters.first
+
+      expect(parameter.required).to be true
     end
   end
 end

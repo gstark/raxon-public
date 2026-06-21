@@ -94,24 +94,25 @@ module Raxon
         @catchall = nil
       end
 
-      # Register a route from a file path and configuration block.
+      # Define a route from a file path and configuration block.
       #
-      # This method is called by route files using the Raxon::RouteLoader.register helper.
-      # It extracts routing information from the file path, creates an endpoint
-      # via the OpenAPI DSL, executes the configuration block, and stores the
-      # endpoint in the routes collection.
+      # This is the internal registration engine. Route files use the public
+      # `Raxon.route` DSL, which infers the file path from the call site and
+      # delegates here. It extracts routing information from the file path,
+      # creates an endpoint via the OpenAPI DSL, executes the configuration
+      # block, and stores the endpoint in the routes collection.
       #
       # @param file_path [String] The absolute path to the route file
       # @param block [Proc] Configuration block that receives the endpoint and
       #   configures its metadata (description, responses, handler, etc.)
       # @return [void]
       # @example
-      #   Raxon::RouteLoader.register("/routes/api/v1/users/get.rb") do |endpoint|
+      #   Raxon::RouteLoader.define("/routes/api/v1/users/get.rb") do |endpoint|
       #     endpoint.description "Get all users"
       #     endpoint.response 200, type: :array, of: :User
       #     endpoint.handler { |request, response| ... }
       #   end
-      def register(file_path, &block)
+      def define(file_path, &block)
         expanded_path = File.expand_path(file_path)
         return if registered_files.include?(expanded_path)
 

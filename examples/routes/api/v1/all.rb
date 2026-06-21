@@ -11,19 +11,19 @@
 # - Rate limiting
 # - Request validation
 
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
-  endpoint.description "Global handler for all /api/v1/* requests"
+Raxon.route do
+  description "Global handler for all /api/v1/* requests"
 
-  # This handler will execute for ALL HTTP methods on any /api/v1/* route
-  # before the specific method handler runs
-  endpoint.handler do |request, response|
-    # Example: Add a custom header to all responses
-    response.rack_response.headers["X-API-Version"] = "v1"
+  # This before block executes for ALL HTTP methods on any /api/v1/* route
+  # before the specific method handler runs.
+  before do |request, response|
+    # Example: Add a custom header to all responses.
+    response.header "X-API-Version", "v1"
 
-    # Example: Log all requests (in a real app, you'd use a proper logger)
-    # puts "[#{Time.now}] #{request.rack_request.request_method} #{request.rack_request.path}"
+    # Example: Log all requests (in a real app, you'd use a proper logger).
+    # puts "[#{Time.now}] #{request.method} #{request.path}"
 
     # You can also perform authentication, authorization, etc. here
-    # and call halt() if needed to stop processing
+    # and call halt() if needed to stop processing.
   end
 end

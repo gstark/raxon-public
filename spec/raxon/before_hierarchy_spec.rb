@@ -13,7 +13,7 @@ RSpec.describe "Before block execution hierarchy" do
       execution_order = []
 
       # Register parent route with only a before block
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.description "Parent auth filter"
         endpoint.before do |request, response|
           execution_order << :parent_before
@@ -22,7 +22,7 @@ RSpec.describe "Before block execution hierarchy" do
       end
 
       # Register child route with before block and handler
-      Raxon::RouteLoader.register("routes/api/v1/statistics/get.rb") do |endpoint|
+      define_route("routes/api/v1/statistics/get.rb") do |endpoint|
         endpoint.description "Get statistics"
         endpoint.response 200, type: :object do |response|
           response.property :data, type: :string
@@ -62,7 +62,7 @@ RSpec.describe "Before block execution hierarchy" do
       execution_order = []
 
       # Register parent route with before block
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.description "Parent filter"
         endpoint.before do |request, response|
           execution_order << :parent_before
@@ -71,7 +71,7 @@ RSpec.describe "Before block execution hierarchy" do
       end
 
       # Register child route with only handler (no before block)
-      Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+      define_route("routes/api/v1/users/get.rb") do |endpoint|
         endpoint.description "Get users"
         endpoint.response 200, type: :array do |response|
           response.property :id, type: :string
@@ -98,7 +98,7 @@ RSpec.describe "Before block execution hierarchy" do
       execution_order = []
 
       # Level 1: /api
-      Raxon::RouteLoader.register("routes/api/get.rb") do |endpoint|
+      define_route("routes/api/get.rb") do |endpoint|
         endpoint.before do |request, response|
           execution_order << :level_1_before
           response.rack_response["X-Level-1"] = "yes"
@@ -106,7 +106,7 @@ RSpec.describe "Before block execution hierarchy" do
       end
 
       # Level 2: /api/v1
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.before do |request, response|
           execution_order << :level_2_before
           response.rack_response["X-Level-2"] = "yes"
@@ -114,7 +114,7 @@ RSpec.describe "Before block execution hierarchy" do
       end
 
       # Level 3: /api/v1/users
-      Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+      define_route("routes/api/v1/users/get.rb") do |endpoint|
         endpoint.response 200, type: :array
         endpoint.before do |request, response|
           execution_order << :level_3_before
@@ -143,7 +143,7 @@ RSpec.describe "Before block execution hierarchy" do
 
   describe "routes with only before blocks (no handler)" do
     it "allows endpoints without handlers" do
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.description "Auth filter only"
         endpoint.before do |request, response|
           response.rack_response["X-Auth"] = "ok"
@@ -158,12 +158,12 @@ RSpec.describe "Before block execution hierarchy" do
     end
 
     it "displays correctly in routes collection" do
-      Raxon::RouteLoader.register("routes/api/v1/get.rb") do |endpoint|
+      define_route("routes/api/v1/get.rb") do |endpoint|
         endpoint.description "Parent auth"
         endpoint.before { |request, response| }
       end
 
-      Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+      define_route("routes/api/v1/users/get.rb") do |endpoint|
         endpoint.description "Get users"
         endpoint.response 200, type: :array
         endpoint.handler { |request, response|

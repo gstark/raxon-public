@@ -1,0 +1,3 @@
+apps/zap/zig-pkg/
+apps/zap/.zig-cache/
+tmp/

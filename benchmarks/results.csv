@@ -1,0 +1,4 @@
+framework,endpoint,url,threads,connections,duration,requests_per_sec,latency_avg,latency_stdev,transfer_per_sec
+raxon,plaintext,http://127.0.0.1:9292/plaintext,4,100,30s,24434.28,4.09ms,734.93us,1.82MB
+raxon,json,http://127.0.0.1:9292/json,4,100,30s,21192.0,4.72ms,747.05us,1.98MB
+raxon,path_param,http://127.0.0.1:9292/users/123,4,100,30s,17346.66,5.76ms,755.70us,1.37MB

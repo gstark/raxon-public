@@ -51,7 +51,7 @@ routes/api/v1/users/$id/get.rb
 **Route definition:**
 
 ```ruby
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Retrieves a specific user by ID"
 
   endpoint.parameters do |params|
@@ -92,7 +92,7 @@ routes/api/v1/orgs/$org_id/projects/$project_id/get.rb
 **Route definition:**
 
 ```ruby
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Get project by organization and project ID"
 
   endpoint.parameters do |params|

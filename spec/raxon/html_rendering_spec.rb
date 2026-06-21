@@ -3,7 +3,7 @@ require "spec_helper"
 RSpec.describe "HTML Rendering" do
   describe "response.html_body=" do
     it "sets content-type to text/html" do
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response|
           response.code = :ok
           response.html_body = "<h1>Hello World</h1>"
@@ -21,7 +21,7 @@ RSpec.describe "HTML Rendering" do
     it "stores HTML string in response body" do
       html_content = "<html><body><p>Test content</p></body></html>"
 
-      Raxon::RouteLoader.register("routes/test/get.rb") do |endpoint|
+      define_route("routes/test/get.rb") do |endpoint|
         endpoint.handler do |request, response|
           response.code = :ok
           response.html_body = html_content
@@ -87,7 +87,7 @@ RSpec.describe "HTML Rendering" do
 
   describe "error handling" do
     it "raises error when template file doesn't exist" do
-      Raxon::RouteLoader.register("routes/html_test/missing/get.rb") do |endpoint|
+      define_route("routes/html_test/missing/get.rb") do |endpoint|
         endpoint.handler do |request, response|
           response.code = :ok
           response.html_body = response.html(title: "Test")

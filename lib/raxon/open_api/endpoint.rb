@@ -39,6 +39,7 @@ module Raxon
         @erb_template = nil
         @route_context = nil
         @operations = []
+        @description = nil
         @summary = nil
         @operation_id = nil
         @tags = []
@@ -46,8 +47,11 @@ module Raxon
         @security = nil
         @validate_response = nil
         @responses = {}
+        @response_schemas = nil
         @parameters = Parameters.new
         @request_body = nil
+        @request_schema = nil
+        @request_schema_generated = false
         @before_blocks = []
         @after_blocks = []
         @metadata_blocks = []
@@ -239,8 +243,8 @@ module Raxon
       #
       # @example
       #   endpoint.parameters do |params|
-      #     params.define :id, type: :string, in: :path
-      #     params.define :limit, type: :number, in: :query, required: false
+      #     params.define :id, type: :string, in: :path # required by default
+      #     params.define :limit, type: :number, in: :query # optional by default
       #   end
       def parameters(&block)
         if block_given?
@@ -265,6 +269,7 @@ module Raxon
         if options.nil?
           @request_body
         else
+          invalidate_request_schema
           @request_body = RequestBody.new(**options)
           yield @request_body if block_given?
         end
@@ -344,6 +349,7 @@ module Raxon
       #     response.property :error, type: :string
       #   end
       def response(status, options, &block)
+        @response_schemas = nil
         @responses[status] = Response.new(**options)
         yield @responses[status] if block_given?
         @responses[status]
@@ -447,7 +453,11 @@ module Raxon
       #   schema = endpoint.request_schema
       #   result = schema.call(params)
       def request_schema
-        @request_schema ||= Raxon::OpenApi::RequestSchemaGenerator.new(@parameters, @request_body).to_dry_schema
+        return @request_schema if @request_schema || @request_schema_generated
+
+        @request_schema = Raxon::OpenApi::RequestSchemaGenerator.new(@parameters, @request_body).to_dry_schema
+        @request_schema_generated = true
+        @request_schema
       end
 
       # Generate Dry::Schema validators for this endpoint's responses.
@@ -643,8 +653,13 @@ module Raxon
           in: location,
           required: options.fetch(:required, default_required)
         )
-        @request_schema = nil
+        invalidate_request_schema
         @parameters.define(name, parameter_options, &block)
+      end
+
+      def invalidate_request_schema
+        @request_schema = nil
+        @request_schema_generated = false
       end
 
       # Execute a block in the given context instance.

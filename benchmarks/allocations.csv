@@ -1,0 +1,4 @@
+framework,endpoint,path,iterations,total_allocated_objects,allocated_objects_per_request,elapsed_seconds
+raxon,plaintext,/plaintext,50000,750006,15.00012,0.1572070000693202
+raxon,json,/json,50000,1850000,37.0,0.5309920001309365
+raxon,path_param,/users/123,50000,3900000,78.0,1.0940400001127273

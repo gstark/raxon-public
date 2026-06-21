@@ -9,6 +9,7 @@ module Raxon
     # Initialize a new Routes collection.
     def initialize
       @entries_by_path = {}
+      @dynamic_entries = []
     end
 
     def each(&block)
@@ -58,8 +59,8 @@ module Raxon
     def find(method, path)
       method = method.upcase
 
-      if (route_data = exact_route_data(method, path))
-        return route_data_with_hierarchy(route_data, method)
+      if (entry = @entries_by_path[path]) && (prepared = entry[:prepared][method])
+        return prepared
       end
 
       find_pattern_match(method, path)
@@ -82,17 +83,26 @@ module Raxon
     # @return [void]
     def reset
       @entries_by_path.clear
+      @dynamic_entries.clear
     end
 
     private
 
     def route_entry(path)
-      @entries_by_path[path] ||= {
-        path: path,
-        mustermann: Mustermann.new(path),
-        all: nil,
-        methods: {}
-      }
+      @entries_by_path[path] ||= begin
+        mustermann = Mustermann.new(path)
+        entry = {
+          path: path,
+          mustermann: mustermann,
+          param_symbols: mustermann.names.map(&:to_sym).freeze,
+          dynamic: path.include?("{"),
+          all: nil,
+          methods: {},
+          prepared: {}
+        }
+        @dynamic_entries << entry if entry[:dynamic]
+        entry
+      end
     end
 
     def route_data(entry, endpoint)
@@ -108,12 +118,14 @@ module Raxon
       raise_collision("ALL", path, endpoint, entry[:all]) if entry[:all]
 
       entry[:all] = endpoint
+      rebuild_prepared_routes
     end
 
     def register_method_route(method, path, endpoint, entry)
       raise_collision(method, path, endpoint, entry[:methods][method]) if entry[:methods].key?(method)
 
       entry[:methods][method] = endpoint
+      rebuild_prepared_routes
     end
 
     def raise_collision(method, path, endpoint, existing_endpoint)
@@ -122,12 +134,23 @@ module Raxon
                           "#{existing_endpoint.route_file_path || "unknown file"}"
     end
 
-    def exact_route_data(method, path)
-      entry = @entries_by_path[path]
-      return unless entry
+    def rebuild_prepared_routes
+      @entries_by_path.each_value do |entry|
+        entry[:prepared].clear
+        prepare_entry_routes(entry)
+      end
+    end
 
-      endpoint = entry[:methods][method] || entry[:all]
-      route_data(entry, endpoint) if endpoint
+    def prepare_entry_routes(entry)
+      %w[GET POST PUT PATCH DELETE HEAD OPTIONS].each do |method|
+        endpoint = entry[:methods][method] || entry[:all]
+        next unless endpoint
+
+        entry[:prepared][method] = {
+          endpoint: endpoint,
+          endpoints: endpoint_hierarchy(entry[:path], method, endpoint)
+        }
+      end
     end
 
     # Build route data with the endpoint hierarchy for the given path.
@@ -140,23 +163,26 @@ module Raxon
     # @param method [String] HTTP method
     # @return [Hash] Route data with endpoints array
     def route_data_with_hierarchy(final_route_data, method)
+      result = final_route_data[:entry][:prepared][method] || {
+        endpoint: final_route_data[:endpoint],
+        endpoints: endpoint_hierarchy(final_route_data[:path], method, final_route_data[:endpoint])
+      }
+
+      return result unless final_route_data[:params]
+
+      result.merge(params: final_route_data[:params])
+    end
+
+    def endpoint_hierarchy(path_pattern, method, final_endpoint)
       endpoints = []
 
-      canonical_hierarchy_entries(final_route_data[:path]).each do |entry|
+      canonical_hierarchy_entries(path_pattern).each do |entry|
         append_endpoint(endpoints, entry[:all])
         append_endpoint(endpoints, entry[:methods][method])
       end
 
-      append_endpoint(endpoints, final_route_data[:endpoint]) if endpoints.empty?
-
-      result = {
-        endpoint: final_route_data[:endpoint],
-        endpoints: endpoints
-      }
-
-      result[:params] = final_route_data[:params] if final_route_data[:params]
-
-      result
+      append_endpoint(endpoints, final_endpoint) if endpoints.empty?
+      endpoints.freeze
     end
 
     def canonical_hierarchy_entries(path_pattern)
@@ -186,33 +212,41 @@ module Raxon
     # @param path [String] Request path
     # @return [Hash, nil] Route data with extracted params if found, nil otherwise
     def find_pattern_match(method, path)
-      matching_route = find_pattern_candidate(method, path) || find_all_pattern_candidate(path)
-
-      route_data_with_hierarchy(matching_route, method) if matching_route
+      find_pattern_candidate(method, path) || find_all_pattern_candidate(method, path)
     end
 
     def find_pattern_candidate(method, path)
-      @entries_by_path.each_value do |entry|
+      @dynamic_entries.each do |entry|
         endpoint = entry[:methods][method]
         next unless endpoint
 
         match = entry[:mustermann].match(path)
-        return route_data(entry, endpoint).merge(params: match.named_captures.transform_keys(&:to_sym)) if match
+        return dynamic_route_data(entry, method, match) if match
       end
 
       nil
     end
 
-    def find_all_pattern_candidate(path)
-      @entries_by_path.each_value do |entry|
+    def find_all_pattern_candidate(method, path)
+      @dynamic_entries.each do |entry|
         endpoint = entry[:all]
         next unless endpoint
 
         match = entry[:mustermann].match(path)
-        return route_data(entry, endpoint).merge(params: match.named_captures.transform_keys(&:to_sym)) if match
+        return dynamic_route_data(entry, method, match) if match
       end
 
       nil
+    end
+
+    def dynamic_route_data(entry, method, match)
+      params = {}
+      entry[:param_symbols].each do |name|
+        value = match[name]
+        params[name] = value unless value.nil?
+      end
+
+      entry[:prepared][method].merge(params: params)
     end
 
     # Create a route key for storage and lookup.

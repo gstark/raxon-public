@@ -12,7 +12,7 @@ Declare file properties in your request body, then access them directly in the h
 
 ```ruby
 # routes/api/v1/photos/post.rb
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Upload a photo"
 
   endpoint.request_body type: :multipart do |body|

@@ -13,8 +13,6 @@ module Raxon
   #     response.body = { success: true }
   #   end
   class Response
-    attr_reader :rack_response
-
     # HTTP status code mappings
     STATUS_CODES = {
       continue: 100,
@@ -92,9 +90,9 @@ module Raxon
     #
     # @param endpoint [Raxon::OpenApi::Endpoint, nil] Optional endpoint for accessing route metadata
     def initialize(endpoint = nil)
-      @rack_response = Rack::Response.new
-      @rack_response.status = 200
-      @rack_response["content-type"] = "application/json"
+      @rack_response = nil
+      @status = 200
+      @headers = {"content-type" => "application/json"}
       @custom_body = nil
       @halted = false
       @endpoint = endpoint
@@ -110,11 +108,14 @@ module Raxon
     #   response.code = :not_found   # Sets status to 404
     #   response.code = 201          # Sets status to 201
     def code=(value)
-      @rack_response.status = if value.is_a?(Symbol)
+      status = if value.is_a?(Symbol)
         STATUS_CODES[value] || raise(ArgumentError, "Unknown status code symbol: #{value}")
       else
         value
       end
+
+      @status = status
+      @rack_response.status = status if @rack_response
     end
 
     # Get the current status code.
@@ -126,7 +127,7 @@ module Raxon
     #   response.code = :ok
     #   response.code  # => 200
     def code
-      @rack_response.status
+      @rack_response ? @rack_response.status : @status
     end
 
     # Set the response body.
@@ -217,7 +218,7 @@ module Raxon
     #   response.html_body = "<h1>Hello World</h1>"
     #   response.html_body = html(name: "John", title: "Welcome")
     def html_body=(value)
-      @rack_response["content-type"] = "text/html"
+      header "content-type", "text/html"
       @custom_body = value
     end
 
@@ -246,7 +247,7 @@ module Raxon
     #
     # @return [Integer] The HTTP status code
     def status_code
-      @rack_response.status
+      @rack_response ? @rack_response.status : @status
     end
 
     # Halt processing - no further before blocks or handlers will be called.
@@ -290,26 +291,33 @@ module Raxon
       @halted
     end
 
+    # Access the underlying Rack::Response, creating it lazily for APIs that need
+    # Rack's cookie, redirect, or streaming behavior.
+    def rack_response
+      return @rack_response if @rack_response
+
+      @rack_response = Rack::Response.new
+      @rack_response.status = @status
+      @headers.each { |key, value| @rack_response[key] = value }
+      @rack_response
+    end
+
     # Convert this response to a Rack-compatible response array.
     # Serializes the body to JSON if it's a Hash or Array.
     #
     # @return [Array] Rack response array [status, headers, body]
     def to_rack
-      # If a custom body was set, serialize it and write to Rack response
-      if @custom_body
-        body_content = if @custom_body.is_a?(String)
-          @custom_body
-        else
-          JSON.generate(@custom_body)
+      if @rack_response
+        # If a custom body was set, serialize it and write to Rack response
+        if @custom_body
+          @rack_response.body.clear if @rack_response.body.respond_to?(:clear)
+          @rack_response.write(serialized_custom_body)
         end
 
-        # Clear any existing body and write the new content
-        @rack_response.body.clear if @rack_response.body.respond_to?(:clear)
-        @rack_response.write(body_content)
+        return @rack_response.finish
       end
 
-      # Return the Rack response finish result
-      @rack_response.finish
+      [@status, @headers, @custom_body ? [serialized_custom_body] : []]
     end
 
     # Set a response header.
@@ -321,7 +329,11 @@ module Raxon
     # @example
     #   response.header "X-Custom-Header", "value"
     def header(key, value)
-      @rack_response[key] = value
+      if @rack_response
+        @rack_response[key] = value
+      else
+        @headers[key] = value
+      end
     end
 
     # Get response headers.
@@ -329,7 +341,7 @@ module Raxon
     #
     # @return [Hash] The response headers
     def headers
-      @rack_response.headers
+      @rack_response ? @rack_response.headers : @headers
     end
 
     private
@@ -347,6 +359,10 @@ module Raxon
       default
     end
 
+    def serialized_custom_body
+      @custom_body.is_a?(String) ? @custom_body : JSON.generate(@custom_body)
+    end
+
     public
 
     # Write directly to the Rack response body.
@@ -358,7 +374,7 @@ module Raxon
     #   response.write "Hello "
     #   response.write "World"
     def write(str)
-      @rack_response.write(str)
+      rack_response.write(str)
     end
 
     # Set a cookie.
@@ -370,7 +386,7 @@ module Raxon
     # @example
     #   response.set_cookie "user_id", value: "123", path: "/", httponly: true
     def set_cookie(key, value)
-      @rack_response.set_cookie(key, value)
+      rack_response.set_cookie(key, value)
     end
 
     # Delete a cookie.
@@ -382,7 +398,7 @@ module Raxon
     # @example
     #   response.delete_cookie "user_id"
     def delete_cookie(key, value = {})
-      @rack_response.delete_cookie(key, value)
+      rack_response.delete_cookie(key, value)
     end
 
     # Redirect to a URL.
@@ -394,7 +410,7 @@ module Raxon
     # @example
     #   response.redirect "/login", 302
     def redirect(target, status = 302)
-      @rack_response.redirect(target, status)
+      rack_response.redirect(target, status)
     end
   end
 end

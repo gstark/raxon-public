@@ -98,13 +98,63 @@ RSpec.describe Raxon::Request, "parameter validation" do
         request.params
         expect(request.validation_errors).to include(:age)
       end
+
+      it "accepts decimal values for number parameters" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.query_param :ratio, type: :number
+
+        env = Rack::MockRequest.env_for("/test?ratio=1.5")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        expect(request.params[:ratio]).to eq(1.5)
+        expect(request.validation_errors).to be_nil
+      end
+
+      it "validates header parameters from headers rather than same-named query parameters" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.header_param :authorization, type: :string, required: true
+
+        env = Rack::MockRequest.env_for("/test?authorization=query-token")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        request.params
+        expect(request.validation_errors).to include(:authorization)
+
+        env = Rack::MockRequest.env_for("/test?authorization=query-token", "HTTP_AUTHORIZATION" => "Bearer header-token")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        expect(request.params[:authorization]).to eq("Bearer header-token")
+        expect(request.validation_errors).to be_nil
+      end
+
+      it "validates cookie parameters from cookies rather than same-named query parameters" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.cookie_param :session_id, type: :string, required: true
+
+        env = Rack::MockRequest.env_for("/test?session_id=query-session")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        request.params
+        expect(request.validation_errors).to include(:session_id)
+
+        env = Rack::MockRequest.env_for("/test?session_id=query-session", "HTTP_COOKIE" => "session_id=cookie-session")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        expect(request.params[:session_id]).to eq("cookie-session")
+        expect(request.validation_errors).to be_nil
+      end
     end
 
     context "with JSON body" do
       it "parses and validates JSON body parameters" do
         endpoint = Raxon::OpenApi::Endpoint.new
         endpoint.parameters do |params|
-          params.define :id, type: :number, in: :path, required: true
+          params.define :id, type: :integer, in: :path, required: true
         end
 
         endpoint.request_body type: :object, required: true do |body|
@@ -124,11 +174,12 @@ RSpec.describe Raxon::Request, "parameter validation" do
         })
 
         env = Rack::MockRequest.env_for(
-          "/test?id=42",  # Pass id as query parameter in URL
+          "/test",
           :method => "PUT",
           :input => json_body,
           "CONTENT_TYPE" => "application/json"
         )
+        env["router.params"] = {"id" => "42"}
 
         rack_request = Rack::Request.new(env)
         request = Raxon::Request.new(rack_request, endpoint)

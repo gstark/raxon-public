@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Slow endpoint for testing duration"
 
   endpoint.response 200, type: :object do |response|

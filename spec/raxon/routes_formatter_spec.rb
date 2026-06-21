@@ -36,7 +36,7 @@ RSpec.describe Raxon::RoutesFormatter do
 
     context "when routes are registered" do
       before do
-        Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+        define_route("routes/api/v1/users/get.rb") do |endpoint|
           endpoint.description "Get all users"
           endpoint.handler do |_request, response|
             response.code = :ok
@@ -44,7 +44,7 @@ RSpec.describe Raxon::RoutesFormatter do
           end
         end
 
-        Raxon::RouteLoader.register("routes/api/v1/users/post.rb") do |endpoint|
+        define_route("routes/api/v1/users/post.rb") do |endpoint|
           endpoint.description "Create a new user"
           endpoint.before do |_request, _response|
             # Authentication check
@@ -55,7 +55,7 @@ RSpec.describe Raxon::RoutesFormatter do
           end
         end
 
-        Raxon::RouteLoader.register("routes/api/v1/users/$id/get.rb") do |endpoint|
+        define_route("routes/api/v1/users/$id/get.rb") do |endpoint|
           endpoint.handler do |_request, response|
             response.code = :ok
             response.body = {}
@@ -151,15 +151,15 @@ RSpec.describe Raxon::RoutesFormatter do
         Raxon::RouteLoader.reset!
 
         # Register routes in non-alphabetical order
-        Raxon::RouteLoader.register("routes/api/v1/posts/get.rb") do |endpoint|
+        define_route("routes/api/v1/posts/get.rb") do |endpoint|
           endpoint.handler { |_request, response| response.code = :ok }
         end
 
-        Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+        define_route("routes/api/v1/users/get.rb") do |endpoint|
           endpoint.handler { |_request, response| response.code = :ok }
         end
 
-        Raxon::RouteLoader.register("routes/api/v1/comments/get.rb") do |endpoint|
+        define_route("routes/api/v1/comments/get.rb") do |endpoint|
           endpoint.handler { |_request, response| response.code = :ok }
         end
 
@@ -182,15 +182,15 @@ RSpec.describe Raxon::RoutesFormatter do
       it "sorts routes by depth (path segment count)" do
         Raxon::RouteLoader.reset!
 
-        Raxon::RouteLoader.register("routes/api/v1/users/$id/posts/$post_id/get.rb") do |endpoint|
+        define_route("routes/api/v1/users/$id/posts/$post_id/get.rb") do |endpoint|
           endpoint.handler { |_request, response| response.code = :ok }
         end
 
-        Raxon::RouteLoader.register("routes/api/v1/users/get.rb") do |endpoint|
+        define_route("routes/api/v1/users/get.rb") do |endpoint|
           endpoint.handler { |_request, response| response.code = :ok }
         end
 
-        Raxon::RouteLoader.register("routes/api/v1/users/$id/get.rb") do |endpoint|
+        define_route("routes/api/v1/users/$id/get.rb") do |endpoint|
           endpoint.handler { |_request, response| response.code = :ok }
         end
 

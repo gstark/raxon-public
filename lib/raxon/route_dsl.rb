@@ -3,10 +3,8 @@
 module Raxon
   # Public shorthand DSL used by route files via `Raxon.route do ... end`.
   #
-  # The shorthand delegates to RouteLoader.register while inferring the route
-  # file path from the call site. It intentionally does not replace the
-  # existing `Raxon::RouteLoader.register(__FILE__) do |endpoint| ... end`
-  # interface; both styles are supported.
+  # The shorthand is the sole route-file API. It infers the route file path
+  # from the call site and delegates to the internal RouteLoader.define engine.
   class RouteDSL
     # @param endpoint [Raxon::OpenApi::Endpoint]
     def initialize(endpoint)
@@ -129,7 +127,7 @@ module Raxon
 
     file_path = caller_locations(1, 1).first.path
 
-    RouteLoader.register(file_path) do |endpoint|
+    RouteLoader.define(file_path) do |endpoint|
       if block.arity.zero?
         RouteDSL.new(endpoint).instance_eval(&block)
       else

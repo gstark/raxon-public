@@ -137,7 +137,7 @@ module Raxon
         Each route file uses the Raxon DSL:
 
         ```ruby
-        Raxon::RouteLoader.register(__FILE__) do |endpoint|
+        Raxon.route do |endpoint|
           endpoint.description "Get all users"
 
           endpoint.response 200, type: :array, of: :User do |response|
@@ -163,7 +163,7 @@ module Raxon
     def create_example_routes
       # Create a basic health check route
       ping_route = <<~RUBY
-        Raxon::RouteLoader.register(__FILE__) do |endpoint|
+        Raxon.route do |endpoint|
           endpoint.description "Health check endpoint"
 
           endpoint.response 200, type: :object do |response|

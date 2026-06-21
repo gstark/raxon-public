@@ -241,6 +241,37 @@ RSpec.describe Raxon::Request, "request_body validation" do
       invalid_request.params
       expect(invalid_request.validation_errors).to include(:age)
     end
+
+    it "validates number request body property minimum and maximum" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :ratio, type: :number, minimum: 0.5, maximum: 1.5
+      end
+
+      valid_body = JSON.generate({ratio: 1.25})
+      valid_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => valid_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      valid_request = Raxon::Request.new(Rack::Request.new(valid_env), endpoint)
+
+      expect(valid_request.params[:ratio]).to eq(1.25)
+      expect(valid_request.validation_errors).to be_nil
+
+      invalid_body = JSON.generate({ratio: 2.0})
+      invalid_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => invalid_body,
+        "CONTENT_TYPE" => "application/json"
+      )
+      invalid_request = Raxon::Request.new(Rack::Request.new(invalid_env), endpoint)
+
+      invalid_request.params
+      expect(invalid_request.validation_errors).to include(:ratio)
+    end
   end
 
   context "with file type properties" do

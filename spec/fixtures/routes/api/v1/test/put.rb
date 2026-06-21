@@ -1,8 +1,8 @@
-Raxon::RouteLoader.register(__FILE__) do |endpoint|
+Raxon.route do |endpoint|
   endpoint.description "Updates an existing statistic"
 
   endpoint.parameters do |parameters|
-    parameters.define :id, in: :path, type: :number, description: "ID of the statistic"
+    parameters.define :id, in: :path, type: :integer, description: "ID of the statistic"
   end
 
   endpoint.request_body type: :object, description: "Statistic parameters", required: true do |body|
