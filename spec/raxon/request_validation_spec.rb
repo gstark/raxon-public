@@ -111,6 +111,30 @@ RSpec.describe Raxon::Request, "parameter validation" do
         expect(request.validation_errors).to be_nil
       end
 
+      it "accepts an enum parameter whose value is in the enum" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.query_param :format, type: :string, enum: %w[pdf png]
+
+        env = Rack::MockRequest.env_for("/test?format=png")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        expect(request.params[:format]).to eq("png")
+        expect(request.validation_errors).to be_nil
+      end
+
+      it "rejects an enum parameter whose value is outside the enum" do
+        endpoint = Raxon::OpenApi::Endpoint.new
+        endpoint.query_param :format, type: :string, enum: %w[pdf png]
+
+        env = Rack::MockRequest.env_for("/test?format=gif")
+        rack_request = Rack::Request.new(env)
+        request = Raxon::Request.new(rack_request, endpoint)
+
+        request.params
+        expect(request.validation_errors).to include(:format)
+      end
+
       it "validates header parameters from headers rather than same-named query parameters" do
         endpoint = Raxon::OpenApi::Endpoint.new
         endpoint.header_param :authorization, type: :string, required: true

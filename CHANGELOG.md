@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Request validation now enforces declared `enum`/`allowable_values` constraints
+  - Generates a dry-schema `included_in?` predicate for scalar fields, rejecting values outside the enum
+  - For array fields the enum constrains each element (matching the OpenAPI items schema)
+  - Reads the enum lazily, so deferred (callable) enums are resolved at request time
+  - Previously the enum was advertised in the OpenAPI document but never enforced, letting out-of-enum values reach handlers
 - README expanded from 160 to 632 lines with production-ready documentation
 - Improved error messages for validation failures
 - Better security practices throughout codebase

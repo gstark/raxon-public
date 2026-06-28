@@ -274,6 +274,109 @@ RSpec.describe Raxon::Request, "request_body validation" do
     end
   end
 
+  context "with enum constraints" do
+    def post_body(endpoint, payload)
+      env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        :input => JSON.generate(payload),
+        "CONTENT_TYPE" => "application/json"
+      )
+      Raxon::Request.new(Rack::Request.new(env), endpoint)
+    end
+
+    it "accepts a scalar enum value that is in the enum" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :status, type: :string, enum: %w[draft published]
+      end
+
+      request = post_body(endpoint, {status: "published"})
+
+      expect(request.params[:status]).to eq("published")
+      expect(request.validation_errors).to be_nil
+    end
+
+    it "rejects a scalar enum value that is outside the enum" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :status, type: :string, enum: %w[draft published]
+      end
+
+      request = post_body(endpoint, {status: "archived"})
+
+      request.params
+      expect(request.validation_errors).to include(:status)
+    end
+
+    it "enforces a deferred (callable) enum, resolved on read" do
+      allowed = %w[a b]
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :kind, type: :string, enum: -> { allowed }
+      end
+
+      expect(post_body(endpoint, {kind: "a"}).validation_errors).to be_nil
+
+      rejected = post_body(endpoint, {kind: "c"})
+      rejected.params
+      expect(rejected.validation_errors).to include(:kind)
+    end
+
+    it "enforces allowable_values as an enum alias" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :color, type: :string, allowable_values: %w[red green]
+      end
+
+      request = post_body(endpoint, {color: "blue"})
+
+      request.params
+      expect(request.validation_errors).to include(:color)
+    end
+
+    it "enforces an integer enum after coercion" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :level, type: :integer, enum: [1, 2, 3]
+      end
+
+      valid = post_body(endpoint, {level: "2"})
+      expect(valid.params[:level]).to eq(2)
+      expect(valid.validation_errors).to be_nil
+
+      invalid = post_body(endpoint, {level: 9})
+      invalid.params
+      expect(invalid.validation_errors).to include(:level)
+    end
+
+    it "constrains each element of an array to the enum" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :tags, type: :array, of: :string, enum: %w[x y z]
+      end
+
+      expect(post_body(endpoint, {tags: %w[x z]}).validation_errors).to be_nil
+
+      invalid = post_body(endpoint, {tags: %w[x bogus]})
+      invalid.params
+      expect(invalid.validation_errors).to have_key(:tags)
+    end
+
+    it "ignores the enum for an absent optional field" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :name, type: :string, required: true
+        body.property :status, type: :string, required: false, enum: %w[draft published]
+      end
+
+      request = post_body(endpoint, {name: "John"})
+
+      expect(request.params[:name]).to eq("John")
+      expect(request.validation_errors).to be_nil
+    end
+  end
+
   context "with file type properties" do
     it "wraps Hash file params in Raxon::UploadedFile" do
       endpoint = Raxon::OpenApi::Endpoint.new

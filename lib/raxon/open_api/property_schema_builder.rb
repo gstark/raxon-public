@@ -149,15 +149,18 @@ module Raxon
         item_type = array_scalar_item_type(field)
 
         constraints = dry_constraints_for(field, :array)
+        # An enum on an array constrains each element, not the array itself
+        # (matching the OpenAPI doc, which emits enum on the items schema).
+        item_constraints = enum_constraint(field)
 
         if field.nullable
           key.maybe(:array, **constraints) do
-            each(item_type)
+            each(item_type, **item_constraints)
           end
         elsif constraints.empty?
-          key.array(item_type)
+          key.array(item_type, **item_constraints)
         else
-          key.value(:array, **constraints).each(item_type)
+          key.value(:array, **constraints).each(item_type, **item_constraints)
         end
       end
 
@@ -220,7 +223,27 @@ module Raxon
           constraints[:max_size?] = field.max_items if field.respond_to?(:max_items) && field.max_items
         end
 
+        # Enforce the declared enum on scalar values. For arrays the enum
+        # constrains each element (see add_array_scalar_item_field), so it is
+        # never applied to the array itself here.
+        constraints.merge!(enum_constraint(field)) unless dry_type == :array || dry_type == :hash
+
         constraints
+      end
+
+      # Build the dry-schema inclusion constraint for a field's enum, or an
+      # empty hash when none is declared. Reads +enum+/+allowable_values+ lazily
+      # (resolving deferred callables on each read), with +enum+ taking
+      # precedence over +allowable_values+ — mirroring the OpenAPI generator.
+      def enum_constraint(field)
+        values = enum_values(field)
+        values ? {included_in?: values} : {}
+      end
+
+      def enum_values(field)
+        return field.enum if field.respond_to?(:enum) && field.enum
+
+        field.allowable_values if field.respond_to?(:allowable_values) && field.allowable_values
       end
     end
   end
