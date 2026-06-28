@@ -405,9 +405,12 @@ module Raxon
         standard_error_response(status, description: description, include_details: true, &block)
       end
 
-      # Define a standard exception error response for this endpoint.
-      # This is a convenience method for the common error response pattern with
-      # status, error_message, and errors properties.
+      # Define a standard validation-error response for this endpoint.
+      #
+      # Documents the canonical validation-error body: an `errors` array of
+      # human-readable messages (e.g. ActiveModel `full_messages`). This matches
+      # the shape produced by the application's exception/record-invalid render
+      # helpers.
       #
       # @param status [Symbol, Integer] HTTP status code (default: :unprocessable_entity)
       # @param description [String] Response description (default: "Validation error")
@@ -417,9 +420,7 @@ module Raxon
       #   endpoint.exception_error :bad_request, description: "Invalid request"
       def exception_error(status = :unprocessable_entity, description: "Validation error")
         response(status, type: :object, description: description) do |resp|
-          resp.property :status, type: :string, description: "Status of the request"
-          resp.property :error_message, type: :string, description: "Error message"
-          resp.property :errors, type: :object, description: "Validation errors"
+          resp.property :errors, type: :array, of: :string, description: "Validation error messages"
         end
       end
 
