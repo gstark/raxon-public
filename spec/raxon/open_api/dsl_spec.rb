@@ -722,6 +722,63 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(response_schema["items"]["type"]).to eq("object")
     end
 
+    it "puts an array-property enum on the items schema instead of the array schema" do
+      described_class.component("Artifact", type: :object) do |component|
+        component.property(:rendition_formats, type: :array, of: :string, enum: %w[pdf png webp])
+      end
+
+      spec = described_class.to_open_api
+      formats = spec["components"]["schemas"]["Artifact"]["properties"]["rendition_formats"]
+
+      expect(formats["type"]).to eq("array")
+      expect(formats).not_to have_key("enum")
+      expect(formats["items"]).to eq({"type" => "string", "enum" => %w[pdf png webp]})
+    end
+
+    it "resolves a deferred (callable) array-property enum on read" do
+      formats = %w[pdf png]
+
+      described_class.component("Artifact", type: :object) do |component|
+        component.property(:rendition_formats, type: :array, of: :string, enum: -> { formats })
+      end
+
+      spec = described_class.to_open_api
+      items = spec["components"]["schemas"]["Artifact"]["properties"]["rendition_formats"]["items"]
+
+      expect(items).to eq({"type" => "string", "enum" => %w[pdf png]})
+    end
+
+    it "puts an array-parameter enum on the items schema" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/renditions")
+        endpoint.query_param(:formats, type: :array, of: :string, enum: %w[pdf png])
+        endpoint.response(200, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      schema = spec["paths"]["/api/v1/renditions"]["get"]["parameters"].first["schema"]
+
+      expect(schema["type"]).to eq("array")
+      expect(schema).not_to have_key("enum")
+      expect(schema["items"]).to eq({"type" => "string", "enum" => %w[pdf png]})
+    end
+
+    it "omits enum on component-backed array items where a sibling enum would be invalid" do
+      described_class.component("Task", type: :object) do |c|
+        c.property(:title, type: :string)
+      end
+
+      described_class.component("TaskList", type: :object) do |component|
+        component.property(:tasks, type: :array, of: "Task", enum: %w[a b])
+      end
+
+      spec = described_class.to_open_api
+      items = spec["components"]["schemas"]["TaskList"]["properties"]["tasks"]["items"]
+
+      expect(items).to eq({"$ref" => "#/components/schemas/Task"})
+    end
+
     it "prefers as: over of: when both are provided for object type" do
       described_class.component("Primary", type: :object) do |c|
         c.property(:name, type: :string)

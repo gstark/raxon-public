@@ -486,6 +486,11 @@ module Raxon
 
       # Generate the item schema for an array property.
       #
+      # An enum declared on the array field constrains its *elements*, so it is
+      # emitted on the items schema (never on the array itself). The enum is read
+      # lazily, keeping deferred (callable) enums working. It is omitted when the
+      # items are a component +$ref+, where a sibling +enum+ would be invalid.
+      #
       # @param property [Property, Component, Response] The array property object
       # @return [Hash] OpenAPI items schema
       #
@@ -495,6 +500,7 @@ module Raxon
 
         items = property_to_items_type(property)
         items.merge!(properties_to_json(property.properties)) if property.of.to_s == "object" && property.properties
+        items.merge!(merge_enum(property)) unless items.key?(:"$ref")
         items
       end
 
@@ -646,10 +652,22 @@ module Raxon
       #
       # @private
       def self.merge_enum_and_nullable(property)
+        merge_enum(property).merge!(merge_nullable(property))
+      end
+
+      # Merge the enum attribute into a hash if the property defines one.
+      #
+      # Reads +allowable_values+/+enum+ lazily, so deferred (callable) enums are
+      # resolved on each read. +enum+ takes precedence over +allowable_values+.
+      #
+      # @param property [Property, Component, Response] The property object
+      # @return [Hash] Hash containing the resolved enum, empty hash otherwise
+      #
+      # @private
+      def self.merge_enum(property)
         result = {}
         result[:enum] = property.allowable_values if property.respond_to?(:allowable_values) && property.allowable_values
         result[:enum] = property.enum if property.respond_to?(:enum) && property.enum
-        result.merge!(merge_nullable(property))
         result
       end
 
