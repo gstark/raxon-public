@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "deferred_enum"
+
 module Raxon
   module OpenApi
     # Represents a single parameter for an API endpoint.
@@ -13,8 +15,16 @@ module Raxon
     # @example Optional query parameter
     #   Parameter.new(:limit, type: :number, in: :query, required: false)
     #
+    # @example Enum parameter (e.g. a constrained path segment)
+    #   Parameter.new(:format, in: :path, type: :string, enum: %w[pdf png])
+    #
+    # @example Deferred enum parameter (resolved lazily on read)
+    #   Parameter.new(:format, in: :path, type: :string,
+    #     enum: -> { RenditionRenderer::SUPPORTED_FORMATS })
+    #
     class Parameter
       extend Dry::Initializer
+      include DeferredEnum
 
       # @!attribute [r] name
       #   @return [Symbol, String] The parameter name
@@ -43,6 +53,17 @@ module Raxon
       # @!attribute [r] of
       #   @return [Symbol, String, nil] For array types, the type of array elements
       option :of, optional: true
+
+      # @!attribute [r] enum
+      #   @return [Array, nil] List of allowed values, surfaced in the generated
+      #     OpenAPI schema. May be supplied as a callable (e.g. a lambda), which
+      #     is stored unevaluated and resolved on every read — see {DeferredEnum}.
+      option :enum, optional: true
+
+      # @!attribute [r] allowable_values
+      #   @return [Array, nil] Alias for enum - list of allowed values. May also
+      #     be supplied as a callable resolved lazily — see {DeferredEnum}.
+      option :allowable_values, optional: true
 
       # @!attribute [r] nullable
       #   @return [Boolean] Whether the parameter can be null (default: false)
@@ -95,6 +116,19 @@ module Raxon
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for body/object parameters
       option :properties, default: proc { {} }
+
+      # Resolve a deferred (callable) +enum+ lazily on read. See {DeferredEnum}.
+      # @return [Array, nil]
+      def enum
+        resolve_deferred_enum(super)
+      end
+
+      # Resolve a deferred (callable) +allowable_values+ lazily on read.
+      # See {DeferredEnum}.
+      # @return [Array, nil]
+      def allowable_values
+        resolve_deferred_enum(super)
+      end
 
       # Define a nested property within this parameter (for body/object parameters).
       #

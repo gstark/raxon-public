@@ -12,6 +12,7 @@ require "active_support/core_ext/enumerable"
 require "active_support/core_ext/hash"
 
 # Load OpenAPI DSL library
+require_relative "raxon/open_api/deferred_enum"
 require_relative "raxon/open_api/component"
 require_relative "raxon/open_api/endpoint"
 require_relative "raxon/open_api/parameter"

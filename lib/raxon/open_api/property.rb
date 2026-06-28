@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "deferred_enum"
+
 module Raxon
   module OpenApi
     # Represents a property within a component, response, or nested object.
@@ -17,6 +19,9 @@ module Raxon
     # @example Enum property
     #   Property.new(type: :string, enum: %w[active inactive], description: "User status")
     #
+    # @example Deferred enum property (resolved lazily on read)
+    #   Property.new(type: :string, enum: -> { MyModel::SUPPORTED_KINDS })
+    #
     # @example Nested object property
     #   property = Property.new(type: :object, description: "User profile")
     #   property.property :bio, type: :string
@@ -24,6 +29,7 @@ module Raxon
     #
     class Property
       extend Dry::Initializer
+      include DeferredEnum
 
       # @!attribute [r] type
       #   @return [String, Array, nil] The property type (:string, :number, :boolean, :object, :array, or array of types for anyOf), automatically processed
@@ -46,11 +52,14 @@ module Raxon
       option :as, optional: true
 
       # @!attribute [r] enum
-      #   @return [Array, nil] List of allowed values
+      #   @return [Array, nil] List of allowed values. May be supplied as a
+      #     callable (e.g. a lambda), which is stored unevaluated and resolved on
+      #     every read — see {DeferredEnum}.
       option :enum, optional: true
 
       # @!attribute [r] allowable_values
-      #   @return [Array, nil] Alias for enum - list of allowed values
+      #   @return [Array, nil] Alias for enum - list of allowed values. May also
+      #     be supplied as a callable resolved lazily — see {DeferredEnum}.
       option :allowable_values, optional: true
 
       # @!attribute [r] nullable
@@ -104,6 +113,19 @@ module Raxon
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for object types
       option :properties, default: proc { {} }
+
+      # Resolve a deferred (callable) +enum+ lazily on read. See {DeferredEnum}.
+      # @return [Array, nil]
+      def enum
+        resolve_deferred_enum(super)
+      end
+
+      # Resolve a deferred (callable) +allowable_values+ lazily on read.
+      # See {DeferredEnum}.
+      # @return [Array, nil]
+      def allowable_values
+        resolve_deferred_enum(super)
+      end
 
       # Define a nested property within this property.
       #

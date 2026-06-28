@@ -57,5 +57,34 @@ RSpec.describe Raxon::OpenApi::Parameter do
       parameter = described_class.new(:filter, in: :query, type: :string, required: true)
       expect(parameter.required).to be true
     end
+
+    it "sets the enum values" do
+      parameter = described_class.new(:format, in: :path, type: :string, enum: ["pdf", "png"])
+      expect(parameter.enum).to eq(["pdf", "png"])
+    end
+
+    it "sets the allowable values" do
+      parameter = described_class.new(:state, in: :query, type: :string, allowable_values: ["active", "inactive"])
+      expect(parameter.allowable_values).to eq(["active", "inactive"])
+    end
+
+    it "resolves a callable enum lazily on each read" do
+      calls = 0
+      parameter = described_class.new(:format, in: :path, type: :string, enum: -> {
+        calls += 1
+        ["docx", "pdf"]
+      })
+
+      expect(calls).to eq(0)
+      expect(parameter.enum).to eq(["docx", "pdf"])
+      expect(parameter.enum).to eq(["docx", "pdf"])
+      expect(calls).to eq(2)
+    end
+
+    it "returns nil when no enum is set" do
+      parameter = described_class.new(:id, in: :path, type: :integer)
+      expect(parameter.enum).to be_nil
+      expect(parameter.allowable_values).to be_nil
+    end
   end
 end

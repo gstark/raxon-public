@@ -395,6 +395,46 @@ RSpec.describe Raxon::OpenApi::DSL do
       )
     end
 
+    it "includes a parameter enum in the OpenAPI specification" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/files/{format}")
+        endpoint.path_param :format, type: :string, enum: ["pdf", "png"], description: "File format"
+        endpoint.response(200, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      parameter = spec["paths"]["/api/v1/files/{format}"]["get"]["parameters"].first
+
+      expect(parameter["schema"]).to include("type" => "string", "enum" => ["pdf", "png"])
+    end
+
+    it "resolves a deferred (callable) parameter enum at OpenAPI generation time" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/files/{format}")
+        endpoint.path_param :format, type: :string, enum: -> { ["docx", "html", "pdf", "png"] }
+        endpoint.response(200, type: :object)
+      end
+
+      spec = described_class.to_open_api
+      parameter = spec["paths"]["/api/v1/files/{format}"]["get"]["parameters"].first
+
+      expect(parameter["schema"]).to include("enum" => ["docx", "html", "pdf", "png"])
+    end
+
+    it "resolves a deferred (callable) property enum at OpenAPI generation time" do
+      described_class.component("Status", type: :object) do |status|
+        status.property(:state, type: :string, enum: -> { ["active", "inactive"] })
+      end
+
+      spec = described_class.to_open_api
+
+      expect(spec["components"]["schemas"]["Status"]["properties"]["state"]).to include(
+        "enum" => ["active", "inactive"]
+      )
+    end
+
     it "creates requestBody using the body shorthand" do
       described_class.endpoint do |endpoint|
         endpoint.operation(:post)
