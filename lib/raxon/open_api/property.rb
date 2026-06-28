@@ -30,6 +30,7 @@ module Raxon
     #
     class Property
       extend Dry::Initializer
+      include PropertyContainer
       include DeferredEnum
       include StrictOptions
 
@@ -136,22 +137,6 @@ module Raxon
       # @return [Array, nil]
       def allowable_values
         resolve_deferred_enum(super)
-      end
-
-      # Define a nested property within this property.
-      #
-      # @param name [Symbol, String] The nested property name
-      # @param options [Hash] Nested property configuration options
-      # @yield [Property] The nested property object for further configuration
-      #
-      # @example
-      #   property.property :address, type: :object do |address|
-      #     address.property :street, type: :string
-      #     address.property :city, type: :string
-      #   end
-      def property(name, options, &block)
-        @properties[name] = Property.new(**options)
-        yield @properties[name] if block_given?
       end
     end
   end

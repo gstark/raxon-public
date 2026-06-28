@@ -26,6 +26,7 @@ module Raxon
     #
     class Response
       extend Dry::Initializer
+      include PropertyContainer
       include DeferredEnum
       include StrictOptions
 
@@ -94,22 +95,6 @@ module Raxon
       # @return [Array, nil]
       def allowable_values
         resolve_deferred_enum(super)
-      end
-
-      # Define a property within this response.
-      #
-      # @param name [Symbol, String] The property name
-      # @param options [Hash] Property configuration options
-      # @yield [Property] The property object for further configuration
-      #
-      # @example
-      #   response.property :success, type: :boolean
-      #   response.property :data, type: :object do |data|
-      #     data.property :id, type: :number
-      #   end
-      def property(name, options, &block)
-        @properties[name] = Property.new(**options)
-        yield @properties[name] if block_given?
       end
     end
   end

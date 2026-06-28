@@ -145,8 +145,8 @@ module Raxon
         before_block.call(request, response, metadata)
       end
 
-      # Execute route hierarchy
-      execute_with_hierarchy(request, response, handler_endpoint, endpoints, metadata)
+      # Execute the matched route hierarchy
+      EndpointInvocation.new(handler_endpoint, endpoints).run(request, response, metadata)
 
       # Execute global after blocks
       config.after_blocks.each do |after_block|
@@ -171,45 +171,6 @@ module Raxon
         end
       else
         wrapped_execution.call
-      end
-    end
-
-    def execute_with_hierarchy(request, response, handler_endpoint, endpoints, metadata = {})
-      # Build metadata from parent to child, with later values overriding earlier ones
-      # Each endpoint's blocks execute in that endpoint's context instance,
-      # giving access to methods defined in that route file
-      endpoints.each do |endpoint|
-        if endpoint.has_metadata?
-          context = request.endpoint_context(endpoint)
-          endpoint.execute_metadata_blocks(context, request, response, metadata)
-        end
-      end
-
-      # Execute before blocks from parent to child
-      # Multiple before blocks per endpoint are executed in the order they were defined
-      # If halt is called, HaltException will be raised and caught by the caller
-      endpoints.each do |endpoint|
-        if endpoint.has_before?
-          context = request.endpoint_context(endpoint)
-          endpoint.execute_before_blocks(context, request, response, metadata)
-        end
-      end
-
-      # Execute the final handler with the accumulated metadata
-      # If halt was called in a before block, we never get here due to the exception
-      # call() handles validation and response validation around the handler
-      if handler_endpoint.has_handler?
-        handler_endpoint.call(request, response, metadata)
-      end
-
-      # Execute after blocks from child to parent (reverse order)
-      # Multiple after blocks per endpoint are executed in the order they were defined
-      # If halt is called in an after block, HaltException will be raised and caught by the caller
-      endpoints.reverse_each do |endpoint|
-        if endpoint.has_after?
-          context = request.endpoint_context(endpoint)
-          endpoint.execute_after_blocks(context, request, response, metadata)
-        end
       end
     end
 

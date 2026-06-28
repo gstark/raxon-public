@@ -17,6 +17,7 @@ module Raxon
     #
     class RequestBody
       extend Dry::Initializer
+      include PropertyContainer
 
       # @!attribute [r] type
       #   @return [String] The request body type (:object, :array, etc.), automatically processed
@@ -51,22 +52,6 @@ module Raxon
       def initialize(**options)
         @options = options
         super
-      end
-
-      # Define a property within this request body.
-      #
-      # @param name [Symbol, String] The property name
-      # @param options [Hash] Property configuration options
-      # @yield [Property] The property object for further configuration
-      #
-      # @example
-      #   request_body.property :name, type: :string
-      #   request_body.property :address, type: :object do |address|
-      #     address.property :street, type: :string
-      #   end
-      def property(name, options, &block)
-        @properties[name] = Property.new(**options)
-        yield @properties[name] if block_given?
       end
     end
   end

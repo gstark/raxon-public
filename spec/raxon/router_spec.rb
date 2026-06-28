@@ -191,7 +191,7 @@ RSpec.describe Raxon::Router do
         rack_request = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
         request = Rack::Request.new(rack_request)
 
-        # Simulate execute_with_hierarchy logic
+        # Simulate the route hierarchy lifecycle
         route_data[:endpoints].each do |endpoint|
           if endpoint.has_before?
             before_request = Raxon::Request.new(request, endpoint)
@@ -235,7 +235,7 @@ RSpec.describe Raxon::Router do
         Raxon::Router.new.call(env)
         # request = Raxon::Request.new(rack_request, endpoint)
         # response = Raxon::Response.new
-        # _status, _headers, _body = endpoint.call(request, response)
+        # Raxon::EndpointInvocation.new(endpoint, [endpoint]).run(request, response, {})
 
         expect(before_call_count).to eq(1)
         expect(handler_call_count).to eq(0)
@@ -301,7 +301,7 @@ RSpec.describe Raxon::Router do
         rack_request = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
         request = Rack::Request.new(rack_request)
 
-        # Simulate execute_with_hierarchy logic
+        # Simulate the route hierarchy lifecycle
         route_data[:endpoints].each do |endpoint|
           if endpoint.has_before?
             before_request = Raxon::Request.new(request, endpoint)
@@ -356,7 +356,7 @@ RSpec.describe Raxon::Router do
         rack_request = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
         request = Rack::Request.new(rack_request)
 
-        # Simulate execute_with_hierarchy logic for metadata
+        # Simulate the route hierarchy lifecycle for metadata
         metadata = {}
         route_data[:endpoints].each do |endpoint|
           if endpoint.has_metadata?
@@ -668,7 +668,7 @@ RSpec.describe Raxon::Router do
         rack_request = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
         request = Rack::Request.new(rack_request)
 
-        # Simulate execute_with_hierarchy logic
+        # Simulate the route hierarchy lifecycle
         route_data[:endpoints].each do |endpoint|
           if endpoint.has_before?
             before_request = Raxon::Request.new(request, endpoint)
@@ -740,7 +740,7 @@ RSpec.describe Raxon::Router do
         rack_request = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
         request = Rack::Request.new(rack_request)
 
-        # Simulate execute_with_hierarchy logic
+        # Simulate the route hierarchy lifecycle
         route_data[:endpoints].each do |endpoint|
           if endpoint.has_before?
             before_request = Raxon::Request.new(request, endpoint)

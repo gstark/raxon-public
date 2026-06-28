@@ -30,6 +30,7 @@ module Raxon
       @body_params = nil
       @form_params = nil
       @json_parse_error = false
+      @resolver = nil
       @metadata = {}
       @context = nil
       @endpoint_context_endpoint = nil
@@ -146,25 +147,15 @@ module Raxon
     def params
       return @validated_params if @validated_params
 
+      # Gate: a bare GET with nothing to resolve short-circuits to path params
+      # without materializing any sources (see CONTEXT.md "Param resolution").
       if simple_get_without_validation?
         return @validated_params = path_params
       end
 
-      # Parse JSON body FIRST before accessing form params
-      # (accessing form params can consume the body stream)
-      json_body = body_params
-
-      # Handle JSON parsing error
-      return @validated_params if @json_parse_error
-
-      # Assemble all parameters from different sources
-      raw_params = assemble_params(json_body)
-      validation_params = assemble_validation_params(json_body)
-
-      # Validate and store parameters
-      validate_and_store_params(validation_params, raw_params)
-
-      @validated_params
+      result = resolver.resolve(collect_sources)
+      @validation_errors = result.errors
+      @validated_params = result.params
     end
 
     # Parse JSON body from request if content type is JSON.
@@ -182,25 +173,17 @@ module Raxon
         JSON.parse(body_content, symbolize_names: true)
       rescue JSON::ParserError
         @json_parse_error = true
-        @validated_params = {}
         nil
       end
     end
 
-    # Assemble all request parameters from various sources.
+    # Whether this request can skip param resolution entirely.
     #
-    # Merges parameters from:
-    # 1. Query parameters
-    # 2. Form parameters
-    # 3. JSON body parameters
-    # 4. Router path parameters
+    # A bare GET/HEAD against an endpoint with no request schema or body, no
+    # query string, and no body has nothing to resolve, so #params can return
+    # path params directly without materializing any sources.
     #
-    # Later sources take precedence over earlier sources to preserve the
-    # historical merged #params behavior where body values override query/form
-    # values and path parameters override all client-supplied values.
-    #
-    # @param json_body [Hash] Parsed JSON body params
-    # @return [Hash] Merged parameters
+    # @return [Boolean]
     #
     # @private
     def simple_get_without_validation?
@@ -212,98 +195,41 @@ module Raxon
       content_length.nil? || content_length == "" || content_length == "0"
     end
 
-    def assemble_params(json_body)
-      query_params
-        .merge(form_params)
-        .merge(json_body)
-        .merge(path_params)
-    end
-
-    # Build the source-specific parameter hash used for request validation.
+    # The param resolver for this request's endpoint. Depends only on the two
+    # spec artifacts it needs, not on the endpoint as a whole.
     #
-    # OpenAPI parameters carry an `in:` location. Validation must read those
-    # values from their declared source so a query/body value cannot satisfy a
-    # required header, cookie, or path parameter with the same name.
-    #
-    # Request body properties are still top-level because request bodies are
-    # modeled separately from OpenAPI parameters in the endpoint schema.
-    #
-    # @param json_body [Hash] Parsed JSON body params
-    # @return [Hash] Source-specific parameters for schema validation
+    # @return [Raxon::ParamResolver]
     #
     # @private
-    def assemble_validation_params(json_body)
-      params = assemble_params(json_body)
-      return params unless @endpoint
-
-      @endpoint.parameters.parameters.each do |parameter|
-        next if parameter.in.to_sym == :query
-
-        key = parameter.name.to_sym
-        params.delete(key)
-        value = parameter_value_from_source(parameter)
-        params[key] = value unless value.nil?
-      end
-
-      params
+    def resolver
+      @resolver ||= ParamResolver.new(
+        parameters: @endpoint ? @endpoint.parameters.parameters : [],
+        schema: @endpoint&.request_schema,
+        request_body: @endpoint&.request_body
+      )
     end
 
-    def parameter_value_from_source(parameter)
-      case parameter.in.to_sym
-      when :path
-        path_params[parameter.name.to_sym]
-      when :query
-        query_params[parameter.name.to_sym]
-      when :header
-        header_param_value(parameter.name)
-      when :cookie
-        cookies[parameter.name.to_s]
-      else
-        assemble_params(body_params)[parameter.name.to_sym]
-      end
-    end
-
-    def header_param_value(name)
-      rack_key = "HTTP_#{name.to_s.upcase.tr("-", "_")}"
-      @rack_request.get_header(rack_key) || headers_hash[header_name(name)]
-    end
-
-    def header_name(name)
-      name.to_s.tr("_", "-").split("-").map(&:capitalize).join("-")
-    end
-
-    # Validate assembled parameters and store the result.
+    # Materialize the six request sources for the resolver.
     #
-    # Uses the endpoint's request_schema for validation if available.
-    # Sets @validated_params and @validation_errors accordingly.
+    # JSON is parsed before form params are read, because reading the form body
+    # consumes the Rack stream (the body-stream ordering constraint).
     #
-    # @param base_params [Hash] The parameters to validate
-    # @return [void]
+    # @return [Raxon::ParamResolver::Sources]
     #
     # @private
-    def validate_and_store_params(validation_params, raw_params = validation_params)
-      if @endpoint&.request_schema
-        result = @endpoint.request_schema.call(validation_params)
-        if result.success?
-          @validated_params = result.to_h
-        else
-          @validation_errors = result.errors.to_h
-          @validated_params = raw_params
-        end
-      else
-        @validated_params = raw_params
-      end
+    def collect_sources
+      json = body_params
+      form = form_params
 
-      coerce_request_body_params if @endpoint&.request_body
-    end
-
-    # Coerce request body params according to the endpoint's request body definition.
-    #
-    # @return [void]
-    #
-    # @private
-    def coerce_request_body_params
-      @validated_params = Raxon::OpenApi::RequestBodyCoercer.new(@endpoint&.request_body).call(@validated_params)
+      ParamResolver::Sources.new(
+        query: query_params,
+        form: form,
+        json: json,
+        path: path_params,
+        headers: headers,
+        cookies: cookies,
+        json_parse_error: @json_parse_error
+      )
     end
 
     # Get the request path.

@@ -22,6 +22,7 @@ module Raxon
       attr_reader :before_blocks
       attr_reader :after_blocks
       attr_reader :metadata_blocks
+      attr_reader :handler_block
       attr_accessor :method
       attr_accessor :route_file_path
       attr_accessor :erb_template
@@ -495,63 +496,6 @@ module Raxon
         !@handler_block.nil?
       end
 
-      # Call this endpoint with a request and response.
-      # Executes the before block and handler, applying validation as needed.
-      #
-      # If the endpoint has parameter validation configured and the request fails
-      # validation, sets a 400 Bad Request response with error details instead of
-      # calling the before block or handler.
-      #
-      # If the endpoint has response validation configured and the response fails
-      # validation, sets a 500 Internal Server Error response with error details.
-      #
-      # @param request [Raxon::Request] The request wrapper object
-      # @param response [Raxon::Response] The response wrapper object
-      # @param metadata [Hash] Optional metadata hash built from route hierarchy
-      # @return [Array] Rack-compatible response array [status, headers, body]
-      #
-      # @example
-      #   request = Raxon::Request.new(rack_request, endpoint)
-      #   response = Raxon::Response.new
-      #   status, headers, body = endpoint.call(request, response)
-      def call(request, response, metadata = {})
-        # Trigger parameter validation by accessing params
-        # This will populate request.validation_errors if validation fails
-        request.params
-
-        # If JSON parsing failed, return 400 Bad Request
-        if request.json_parse_error
-          response.code = :bad_request
-          response.body = {
-            error: "Invalid JSON in request body"
-          }
-          return
-        end
-
-        # If validation failed, return 400 Bad Request with error details
-        if request.validation_errors
-          response.code = :bad_request
-          response.body = {
-            error: "Validation failed",
-            details: request.validation_errors
-          }
-          return
-        end
-
-        # Stop processing if halt was called
-        unless response.halted?
-          # Execute the handler block if defined (can be absent for before-only endpoints)
-          if @handler_block
-            # Get the context instance from the request (shared with before/after blocks)
-            context_instance = request.endpoint_context(self)
-            execute_block_in_context(context_instance, @handler_block, request, response, metadata)
-          end
-        end
-
-        # Validate response body against schema for the returned status code
-        validate_response_body(response)
-      end
-
       # Create a new instance of the route context class.
       #
       # The route context is an anonymous class that was created when the route
@@ -581,64 +525,6 @@ module Raxon
         @default_context_class ||= Class.new { include Raxon::HandlerHelpers }
       end
 
-      # Execute metadata blocks in the given context instance.
-      #
-      # @param context_instance [Object, nil] The context instance for this request
-      # @param request [Raxon::Request] The request object
-      # @param response [Raxon::Response] The response object
-      # @param metadata [Hash] The metadata hash to populate
-      # @return [void]
-      def execute_metadata_blocks(context_instance, request, response, metadata)
-        return unless has_metadata?
-
-        @metadata_blocks.each do |block|
-          execute_block_in_context(context_instance, block, request, response, metadata)
-        end
-      end
-
-      # Execute before blocks in the given context instance.
-      #
-      # @param context_instance [Object, nil] The context instance for this request
-      # @param request [Raxon::Request] The request object
-      # @param response [Raxon::Response] The response object
-      # @param metadata [Hash] The metadata hash
-      # @return [void]
-      def execute_before_blocks(context_instance, request, response, metadata)
-        return unless has_before?
-
-        @before_blocks.each do |block|
-          execute_block_in_context(context_instance, block, request, response, metadata)
-        end
-      end
-
-      # Execute after blocks in the given context instance.
-      #
-      # @param context_instance [Object, nil] The context instance for this request
-      # @param request [Raxon::Request] The request object
-      # @param response [Raxon::Response] The response object
-      # @param metadata [Hash] The metadata hash
-      # @return [void]
-      def execute_after_blocks(context_instance, request, response, metadata)
-        return unless has_after?
-
-        @after_blocks.each do |block|
-          execute_block_in_context(context_instance, block, request, response, metadata)
-        end
-      end
-
-      # Execute the handler block in the given context instance.
-      #
-      # @param context_instance [Object, nil] The context instance for this request
-      # @param request [Raxon::Request] The request object
-      # @param response [Raxon::Response] The response object
-      # @param metadata [Hash] The metadata hash
-      # @return [void]
-      def execute_handler(context_instance, request, response, metadata)
-        return unless @handler_block
-
-        execute_block_in_context(context_instance, @handler_block, request, response, metadata)
-      end
-
       private
 
       def standard_error_response(status, description:, include_details:, &block)
@@ -661,90 +547,6 @@ module Raxon
       def invalidate_request_schema
         @request_schema = nil
         @request_schema_generated = false
-      end
-
-      # Execute a block in the given context instance.
-      #
-      # If a context instance is provided, uses instance_exec to run the block
-      # with `self` set to the context instance. This gives the block access to
-      # methods defined in the route file and instance variables.
-      #
-      # If no context instance is provided (backwards compatibility), calls the
-      # block directly.
-      #
-      # @param context_instance [Object, nil] The context instance
-      # @param block [Proc] The block to execute
-      # @param request [Raxon::Request] The request object
-      # @param response [Raxon::Response] The response object
-      # @param metadata [Hash] The metadata hash
-      # @return [void]
-      def execute_block_in_context(context_instance, block, request, response, metadata)
-        if context_instance
-          context_instance.instance_exec(request, response, metadata, &block)
-        else
-          block.call(request, response, metadata)
-        end
-      end
-
-      # Validate the response body against the schema for its status code.
-      # Raises an error if validation fails, as this indicates a programming error.
-      #
-      # @param response [Raxon::Response] The response to validate
-      # @return [void]
-      def validate_response_body(response)
-        status_code = response.status_code
-        schema = response_schemas[status_code]
-
-        # Only validate if we have a schema for this status code and a body to validate
-        return unless schema && response.body
-
-        validation_mode = response_validation_mode
-        return if validation_mode == false
-
-        result = schema.call(response.body)
-        return if result.success?
-
-        handle_response_validation_failure(response, status_code, result.errors.to_h, validation_mode)
-      end
-
-      def response_validation_mode
-        configured_mode = Raxon.configuration.response_validation
-        return false if @validate_response == false
-        return :error_response if @validate_response == true && configured_mode == false
-
-        configured_mode
-      end
-
-      def handle_response_validation_failure(response, status_code, errors, validation_mode)
-        case validation_mode
-        when :raise
-          raise Raxon::ResponseValidationError.new(status_code: status_code, errors: errors)
-        when :log
-          warn response_validation_failure_message(status_code, errors)
-        when :error_response, true
-          write_response_validation_error(response, status_code, errors)
-        else
-          write_response_validation_error(response, status_code, errors)
-        end
-      end
-
-      def write_response_validation_error(response, status_code, errors)
-        response.code = :internal_server_error
-        response.body = response_validation_error_body(status_code, errors)
-      end
-
-      def response_validation_error_body(status_code, errors)
-        body = {
-          error: "Response validation failed",
-          status_code: status_code
-        }
-        body[:details] = errors if Raxon.configuration.expose_validation_details
-        body
-      end
-
-      def response_validation_failure_message(status_code, errors)
-        body = response_validation_error_body(status_code, errors)
-        "[Raxon] Response validation failed for status #{status_code}: #{body.inspect}"
       end
     end
   end

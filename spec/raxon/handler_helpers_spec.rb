@@ -219,7 +219,7 @@ RSpec.describe "Handler Helpers" do
       response = Raxon::Response.new(endpoint)
 
       # Call the endpoint
-      endpoint.call(request, response)
+      Raxon::EndpointInvocation.new(endpoint, [endpoint]).run(request, response, {})
 
       # Verify the helper was called
       expect(response.body).to eq({formatted: true, data: "test data"})
@@ -255,7 +255,7 @@ RSpec.describe "Handler Helpers" do
       response = Raxon::Response.new(endpoint)
 
       # Call the endpoint
-      endpoint.call(request, response)
+      Raxon::EndpointInvocation.new(endpoint, [endpoint]).run(request, response, {})
 
       # Verify the helper accessed the request correctly
       expect(response.body).to eq({header: "test-value"})

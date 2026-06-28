@@ -17,6 +17,7 @@ module Raxon
     #
     class Component
       extend Dry::Initializer
+      include PropertyContainer
       include StrictOptions
 
       # @!attribute [r] name
@@ -49,23 +50,6 @@ module Raxon
       def initialize(name, **options)
         reject_unknown_options!(options)
         super
-      end
-
-      # Define a property within this component.
-      #
-      # @param name [Symbol, String] The property name
-      # @param options [Hash] Property configuration options
-      # @yield [Property] The property object for further configuration
-      #
-      # @example
-      #   component.property :name, type: :string, required: true
-      #   component.property :profile, type: :object do |profile|
-      #     profile.property :bio, type: :string
-      #   end
-      def property(name, options, &block)
-        @properties[name] = Property.new(**options)
-
-        yield @properties[name] if block_given?
       end
     end
   end

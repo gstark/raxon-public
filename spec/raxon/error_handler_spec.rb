@@ -219,7 +219,7 @@ RSpec.describe Raxon::ErrorHandler do
           rack_request = Rack::Request.new(env)
           request = Raxon::Request.new(rack_request, endpoint)
           response = Raxon::Response.new
-          endpoint.call(request, response)
+          Raxon::EndpointInvocation.new(endpoint, [endpoint]).run(request, response, {})
         }
 
         middleware = Raxon::ErrorHandler.new(app)
