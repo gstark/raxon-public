@@ -826,7 +826,7 @@ module Raxon
           description: response.description.to_s,
           headers: {},
           content: {
-            "application/json" => {
+            response.content_type => {
               schema: property_to_json("XXXXX", response)[1].except(:description)
             }
           }

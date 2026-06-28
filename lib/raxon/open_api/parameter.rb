@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "deferred_enum"
+require_relative "strict_options"
 
 module Raxon
   module OpenApi
@@ -25,6 +26,7 @@ module Raxon
     class Parameter
       extend Dry::Initializer
       include DeferredEnum
+      include StrictOptions
 
       # @!attribute [r] name
       #   @return [Symbol, String] The parameter name
@@ -116,6 +118,16 @@ module Raxon
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for body/object parameters
       option :properties, default: proc { {} }
+
+      # Construct a parameter, rejecting any unknown option (see {StrictOptions}).
+      #
+      # @param name [Symbol, String] the parameter name
+      # @param options [Hash] parameter configuration options
+      # @raise [ArgumentError] when an unsupported option is supplied
+      def initialize(name, **options)
+        reject_unknown_options!(options)
+        super
+      end
 
       # Resolve a deferred (callable) +enum+ lazily on read. See {DeferredEnum}.
       # @return [Array, nil]

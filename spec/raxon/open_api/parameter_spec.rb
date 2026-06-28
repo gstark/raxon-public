@@ -17,6 +17,11 @@ RSpec.describe Raxon::OpenApi::Parameter do
       expect(parameter.type).to eq("number")
     end
 
+    it "raises ArgumentError on an unknown option" do
+      expect { described_class.new(:id, in: :path, type: :number, bogus: true) }
+        .to raise_error(ArgumentError, /unknown option for .*Parameter: :bogus/)
+    end
+
     it "sets the description" do
       parameter = described_class.new(:id, in: :path, type: :number, description: "ID of the post")
       expect(parameter.description).to eq("ID of the post")

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "deferred_enum"
+require_relative "strict_options"
 
 module Raxon
   module OpenApi
@@ -30,6 +31,7 @@ module Raxon
     class Property
       extend Dry::Initializer
       include DeferredEnum
+      include StrictOptions
 
       # @!attribute [r] type
       #   @return [String, Array, nil] The property type (:string, :number, :boolean, :object, :array, or array of types for anyOf), automatically processed
@@ -113,6 +115,15 @@ module Raxon
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for object types
       option :properties, default: proc { {} }
+
+      # Construct a property, rejecting any unknown option (see {StrictOptions}).
+      #
+      # @param options [Hash] property configuration options
+      # @raise [ArgumentError] when an unsupported option is supplied
+      def initialize(**options)
+        reject_unknown_options!(options)
+        super
+      end
 
       # Resolve a deferred (callable) +enum+ lazily on read. See {DeferredEnum}.
       # @return [Array, nil]

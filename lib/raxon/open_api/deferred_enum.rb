@@ -2,7 +2,8 @@
 
 module Raxon
   module OpenApi
-    # Lazy resolution for +enum+ / +allowable_values+ on properties and parameters.
+    # Lazy resolution for +enum+ / +allowable_values+ on properties, parameters,
+    # and responses.
     #
     # Route DSL bodies are evaluated by Raxon::RouteLoader.load! at boot, before
     # the host application's autoloading (e.g. a Rails engine) is wired up. An

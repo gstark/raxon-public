@@ -21,6 +21,30 @@ RSpec.describe Raxon::OpenApi::Response do
       response = described_class.new(type: :array, of: "Post")
       expect(response.of).to eq("Post")
     end
+
+    it "defaults the content_type to application/json" do
+      expect(response.content_type).to eq("application/json")
+    end
+
+    it "sets a custom content_type" do
+      response = described_class.new(type: :string, content_type: "text/csv")
+      expect(response.content_type).to eq("text/csv")
+    end
+
+    it "sets the enum" do
+      response = described_class.new(type: :array, of: :string, enum: %w[a b])
+      expect(response.enum).to eq(%w[a b])
+    end
+
+    it "resolves a deferred (callable) enum on read" do
+      response = described_class.new(type: :array, of: :string, enum: -> { %w[a b] })
+      expect(response.enum).to eq(%w[a b])
+    end
+
+    it "raises ArgumentError on an unknown option" do
+      expect { described_class.new(type: :object, bogus: true) }
+        .to raise_error(ArgumentError, /unknown option for .*Response: :bogus/)
+    end
   end
 
   describe "#property" do

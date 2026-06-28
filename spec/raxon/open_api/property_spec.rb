@@ -17,6 +17,16 @@ RSpec.describe Raxon::OpenApi::Property do
       expect(property.of).to eq("Post")
     end
 
+    it "raises ArgumentError on an unknown option" do
+      expect { described_class.new(type: :string, bogus: true) }
+        .to raise_error(ArgumentError, /unknown option for .*Property: :bogus/)
+    end
+
+    it "lists multiple unknown options in the error" do
+      expect { described_class.new(type: :string, foo: 1, bar: 2) }
+        .to raise_error(ArgumentError, /unknown options for .*Property: :foo, :bar/)
+    end
+
     it "sets the required flag" do
       property = described_class.new(type: :string, required: false)
       expect(property.required).to be false

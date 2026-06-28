@@ -20,6 +20,11 @@ RSpec.describe Raxon::OpenApi::Component do
       component = described_class.new("Post", type: :array, of: "Post")
       expect(component.of).to eq("Post")
     end
+
+    it "raises ArgumentError on an unknown option" do
+      expect { described_class.new("Post", type: :object, enum: %w[a b]) }
+        .to raise_error(ArgumentError, /unknown option for .*Component: :enum/)
+    end
   end
 
   describe "#property" do

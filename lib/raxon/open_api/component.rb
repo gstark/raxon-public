@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "strict_options"
+
 module Raxon
   module OpenApi
     # Represents a reusable OpenAPI component schema.
@@ -15,6 +17,7 @@ module Raxon
     #
     class Component
       extend Dry::Initializer
+      include StrictOptions
 
       # @!attribute [r] name
       #   @return [Symbol, String] The component name
@@ -37,6 +40,16 @@ module Raxon
       option :properties, default: proc { {} }
 
       attr_reader :as
+
+      # Construct a component, rejecting any unknown option (see {StrictOptions}).
+      #
+      # @param name [Symbol, String] the component name
+      # @param options [Hash] component configuration options
+      # @raise [ArgumentError] when an unsupported option is supplied
+      def initialize(name, **options)
+        reject_unknown_options!(options)
+        super
+      end
 
       # Define a property within this component.
       #

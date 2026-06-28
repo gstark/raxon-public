@@ -670,6 +670,50 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(response_schema["items"]["properties"]["name"]["type"]).to eq("string")
     end
 
+    it "emits an array response enum on the items schema" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/states")
+
+        endpoint.response(:ok, type: :array, of: :string, enum: %w[draft published archived])
+      end
+
+      spec = described_class.to_open_api
+      response_schema = spec["paths"]["/api/v1/states"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+      expect(response_schema["type"]).to eq("array")
+      expect(response_schema["items"]).to include("type" => "string", "enum" => %w[draft published archived])
+    end
+
+    it "resolves a deferred (callable) array response enum at OpenAPI generation time" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/formats")
+
+        endpoint.response(:ok, type: :array, of: :string, enum: -> { %w[pdf png] })
+      end
+
+      spec = described_class.to_open_api
+      response_schema = spec["paths"]["/api/v1/formats"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+
+      expect(response_schema["items"]).to include("enum" => %w[pdf png])
+    end
+
+    it "emits a custom response content_type as the content media-type key" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/export")
+
+        endpoint.response(200, type: :string, content_type: "text/csv")
+      end
+
+      spec = described_class.to_open_api
+      content = spec["paths"]["/api/v1/export"]["get"]["responses"]["200"]["content"]
+
+      expect(content.keys).to eq(["text/csv"])
+      expect(content["text/csv"]["schema"]).to include("type" => "string")
+    end
+
     it "puts nullable on array schemas instead of array items" do
       described_class.endpoint do |endpoint|
         endpoint.operation(:get)
