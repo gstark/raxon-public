@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "set"
-
 module Raxon
   module OpenApi
     # Fail-fast guard against unknown keyword options on DSL objects.

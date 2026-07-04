@@ -96,7 +96,15 @@ module Raxon
       @custom_body = nil
       @halted = false
       @endpoint = endpoint
+      @request = nil
     end
+
+    # The request being responded to, set by the Router. Enables conditional
+    # GET helpers (#etag, #last_modified) to inspect If-None-Match and
+    # If-Modified-Since headers.
+    #
+    # @return [Raxon::Request, nil]
+    attr_accessor :request
 
     # Set the response status code.
     # Delegates to Rack::Response#status=
@@ -225,9 +233,13 @@ module Raxon
     # Render an ERB template with the given local variables.
     # Uses the pre-compiled ERB template stored in the endpoint for efficiency.
     #
-    # @param locals [Hash] Local variables to make available in the ERB template
+    # Output is HTML-escaped by default (via Raxon::Template/Erubi), so
+    # user-controlled locals interpolated with +<%= %>+ cannot inject markup.
+    # Use +<%== %>+ in the template for values that are intentionally raw HTML.
+    #
+    # @param locals [Hash] Local variables to make available in the template
     # @return [String] The rendered HTML content
-    # @raise [Raxon::Error] If the endpoint has no ERB template configured
+    # @raise [Raxon::Error] If the endpoint has no template configured
     #
     # @example
     #   # In routes/users/$id/get.rb
@@ -238,8 +250,7 @@ module Raxon
         raise Raxon::Error, "Template not found"
       end
 
-      # Use ERB's native result_with_hash for context handling.
-      @endpoint.erb_template.result_with_hash(locals)
+      @endpoint.erb_template.render(locals)
     end
 
     # Get the current status code.
@@ -248,6 +259,54 @@ module Raxon
     # @return [Integer] The HTTP status code
     def status_code
       @rack_response ? @rack_response.status : @status
+    end
+
+    # Set the ETag header and halt with 304 Not Modified when the request's
+    # If-None-Match header already carries a matching value.
+    #
+    # The value is quoted per RFC 9110 (pass an already-quoted string to use it
+    # verbatim) and marked weak by default, which is appropriate for
+    # semantically-equivalent JSON bodies. The freshness check only applies to
+    # GET and HEAD requests; for other methods (or a response with no attached
+    # request) only the header is set.
+    #
+    # @param value [String, #to_s] The entity tag value
+    # @param weak [Boolean] Emit a weak validator (W/ prefix), default true
+    # @return [String] The full ETag header value
+    # @raise [Raxon::HaltException] When the request is fresh (halts with 304)
+    #
+    # @example
+    #   endpoint.handler do |request, response|
+    #     user = find_user(request.params[:id])
+    #     response.etag user.cache_key  # halts with 304 when unchanged
+    #     response.ok user.as_json
+    #   end
+    def etag(value, weak: true)
+      full_etag = quote_etag(value.to_s)
+      full_etag = "W/#{full_etag}" if weak
+      header "etag", full_etag
+
+      halt_not_modified if etag_fresh?(full_etag)
+      full_etag
+    end
+
+    # Set the Last-Modified header and halt with 304 Not Modified when the
+    # request's If-Modified-Since header is at least as recent.
+    #
+    # The freshness check only applies to GET and HEAD requests; for other
+    # methods (or a response with no attached request) only the header is set.
+    #
+    # @param time [Time, #to_time] The resource's last modification time
+    # @return [void]
+    # @raise [Raxon::HaltException] When the request is fresh (halts with 304)
+    #
+    # @example
+    #   response.last_modified user.updated_at
+    def last_modified(time)
+      time = time.to_time if time.respond_to?(:to_time)
+      header "last-modified", time.httpdate
+
+      halt_not_modified if last_modified_fresh?(time)
     end
 
     # Halt processing - no further before blocks or handlers will be called.
@@ -361,6 +420,56 @@ module Raxon
 
     def serialized_custom_body
       @custom_body.is_a?(String) ? @custom_body : JSON.generate(@custom_body)
+    end
+
+    def quote_etag(value)
+      value.start_with?('"') ? value : %("#{value}")
+    end
+
+    # Conditional freshness only applies to safe methods; a 304 answer to a
+    # POST/PUT/DELETE would be wrong (RFC 9110).
+    def conditional_get_request?
+      return false unless @request
+
+      %w[GET HEAD].include?(@request.rack_request.request_method)
+    end
+
+    def etag_fresh?(full_etag)
+      return false unless conditional_get_request?
+
+      if_none_match = @request.rack_request.get_header("HTTP_IF_NONE_MATCH")
+      return false unless if_none_match
+      return true if if_none_match.strip == "*"
+
+      # If-None-Match uses weak comparison: the W/ prefix is ignored.
+      expected = strip_weak_prefix(full_etag)
+      if_none_match.split(",").any? { |candidate| strip_weak_prefix(candidate.strip) == expected }
+    end
+
+    def strip_weak_prefix(etag)
+      etag.delete_prefix("W/")
+    end
+
+    def last_modified_fresh?(time)
+      return false unless conditional_get_request?
+
+      if_modified_since = @request.rack_request.get_header("HTTP_IF_MODIFIED_SINCE")
+      return false unless if_modified_since
+
+      since = begin
+        Time.httpdate(if_modified_since)
+      rescue ArgumentError
+        nil
+      end
+
+      # Compare at whole-second granularity: HTTP dates carry no subseconds.
+      !since.nil? && time.to_i <= since.to_i
+    end
+
+    def halt_not_modified
+      # A 304 carries no body, so a content-type would be misleading.
+      headers.delete("content-type")
+      halt(code: :not_modified, body: nil)
     end
 
     public

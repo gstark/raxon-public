@@ -305,16 +305,26 @@ RSpec.describe Raxon::Response do
   end
 
   describe "#html" do
-    it "renders ERB template with locals" do
+    it "renders template with locals" do
       endpoint = Raxon::OpenApi::Endpoint.new
-      template = ERB.new("<h1>Hello <%= name %></h1>")
-      endpoint.erb_template = template
+      endpoint.erb_template = Raxon::Template.new("<h1>Hello <%= name %></h1>")
 
       response = Raxon::Response.new(endpoint)
 
       result = response.html(name: "World")
 
       expect(result).to eq("<h1>Hello World</h1>")
+    end
+
+    it "HTML-escapes locals to prevent XSS" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.erb_template = Raxon::Template.new("<h1>Hello <%= name %></h1>")
+
+      response = Raxon::Response.new(endpoint)
+
+      result = response.html(name: "<script>alert(1)</script>")
+
+      expect(result).to eq("<h1>Hello &lt;script&gt;alert(1)&lt;/script&gt;</h1>")
     end
 
     it "raises error when no template configured" do
@@ -596,5 +606,65 @@ RSpec.describe Raxon::Response do
         expect(status).to eq(302)
       end
     end
+  end
+end
+
+RSpec.describe Raxon::Response, "rack-backed state" do
+  it "reads code from the plain status before the Rack response materializes" do
+    response = Raxon::Response.new
+    response.code = :created
+
+    expect(response.code).to eq(201)
+  end
+
+  it "reads code from the Rack response once materialized" do
+    response = Raxon::Response.new
+    response.rack_response
+    response.code = :accepted
+
+    expect(response.code).to eq(202)
+  end
+
+  it "writes headers to the Rack response once materialized" do
+    response = Raxon::Response.new
+    response.rack_response
+    response.header "X-Request-Id", "abc-123"
+
+    expect(response.headers["X-Request-Id"]).to eq("abc-123")
+
+    _status, headers, _body = response.to_rack
+    expect(headers["X-Request-Id"]).to eq("abc-123")
+  end
+
+  it "replaces any Rack body content with the custom body on to_rack" do
+    response = Raxon::Response.new
+    response.rack_response.write("stale")
+    response.body = {fresh: true}
+
+    _status, _headers, body = response.to_rack
+
+    expect(body.join).to eq({fresh: true}.to_json)
+  end
+end
+
+RSpec.describe Raxon::Response, "non-clearable Rack bodies" do
+  it "appends the custom body when the Rack body cannot be cleared" do
+    streaming_body = Class.new do
+      def initialize = @chunks = ["streamed"]
+
+      def each(&block) = @chunks.each(&block)
+
+      def <<(chunk) = @chunks << chunk
+    end.new
+
+    response = Raxon::Response.new
+    response.rack_response.body = streaming_body
+    response.body = {fresh: true}
+
+    _status, _headers, body = response.to_rack
+
+    chunks = []
+    body.each { |chunk| chunks << chunk }
+    expect(chunks).to eq(["streamed", {fresh: true}.to_json])
   end
 end

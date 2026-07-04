@@ -3,8 +3,10 @@
   <head>
     <meta charset="UTF-8">
     <title>Swagger UI</title>
-    <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,700|Source+Code-Pro:300,600|Titillium+Web:400,600,700" rel="stylesheet">
-    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/3.24.2/swagger-ui.css" >
+    <link rel="stylesheet" type="text/css"
+      href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui.min.css"
+      integrity="sha512-+9UD8YSD9GF7FzOH38L9S6y56aYNx3R4dYbOCgvTJ2ZHpJScsahNdaMQJU/8osUiz9FPu0YZ8wdKf4evUbsGSg=="
+      crossorigin="anonymous" referrerpolicy="no-referrer">
     <style>
       html
       {
@@ -26,12 +28,25 @@
   </head>
   <body>
     <div id="swagger-ui"></div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/3.24.2/swagger-ui-bundle.js"> </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/3.24.2/swagger-ui-standalone-preset.js"> </script>
+    <%#
+      The spec is emitted into an application/json block and parsed at runtime
+      rather than interpolated into executable JS. `<` / `>` are additionally
+      escaped as JSON \uXXXX sequences (which JSON.parse restores) so no spec
+      string — including auto-generated ones sourced from DB column comments via
+      from_resource — can break out of the script element and inject markup.
+    %>
+    <script type="application/json" id="openapi-spec"><%= json.gsub("<", "\\u003c").gsub(">", "\\u003e") %></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-bundle.min.js"
+      integrity="sha512-7ihPQv5ibiTr0DW6onbl2MIKegdT6vjpPySyIb4Ftp68kER6Z7Yiub0tFoMmCHzZfQE9+M+KSjQndv6NhYxDgg=="
+      crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.17.14/swagger-ui-standalone-preset.min.js"
+      integrity="sha512-UrYi+60Ci3WWWcoDXbMmzpoi1xpERbwjPGij6wTh8fXl81qNdioNNHExr9ttnBebKF0ZbVnPlTPlw+zECUK1Xw=="
+      crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script>
       window.onload = function() {
-        var spec = <%= json %>;
-        // Build a system
+        var spec = JSON.parse(document.getElementById("openapi-spec").textContent);
         const ui = SwaggerUIBundle({
           spec: spec,
           dom_id: '#swagger-ui',

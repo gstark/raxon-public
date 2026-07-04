@@ -171,3 +171,9 @@ RSpec.describe Raxon::Configuration do
     end
   end
 end
+
+RSpec.describe Raxon, ".configure" do
+  it "leaves the configuration untouched when called without a block" do
+    expect { Raxon.configure }.not_to change { Raxon.configuration.routes_directory }
+  end
+end

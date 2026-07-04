@@ -77,6 +77,22 @@ RSpec.describe Raxon::Command do
     end
   end
 
+  describe "#generate" do
+    it "creates and executes a GenerateCommand with type, args, and options" do
+      require "raxon/cli/generate_command"
+      options = {}
+
+      command = described_class.new
+      allow(command).to receive(:options).and_return(options)
+
+      generate_command_instance = instance_double(Raxon::GenerateCommand)
+      expect(Raxon::GenerateCommand).to receive(:new).with("route", ["api/v1/users", "get"], options).and_return(generate_command_instance)
+      expect(generate_command_instance).to receive(:execute)
+
+      command.generate("route", "api/v1/users", "get")
+    end
+  end
+
   describe "Raxon::CLI alias" do
     it "is an alias for Raxon::Command" do
       expect(Raxon::CLI).to eq(Raxon::Command)

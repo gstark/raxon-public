@@ -464,15 +464,22 @@ module Raxon
 
       # Generate Dry::Schema validators for this endpoint's responses.
       #
+      # Keys are normalized to integer status codes (via {DSL.status_to_code}) so
+      # responses declared with a symbol status (e.g. +exception_error+ /
+      # +response :unprocessable_entity+) can still be looked up by the integer
+      # +Response#status_code+ at validation time. Without this, symbol-declared
+      # responses would never be validated.
+      #
       # @return [Hash<Integer, Dry::Schema::Params>] Hash of status codes to schemas
       #
       # @example
       #   schemas = endpoint.response_schemas
       #   result = schemas[200].call(response_body)
       def response_schemas
-        @response_schemas ||= @responses.transform_values do |response|
-          Raxon::OpenApi::ResponseSchemaGenerator.new(response).to_dry_schema
-        end.compact
+        @response_schemas ||= @responses.each_with_object({}) do |(status, response), schemas|
+          schema = Raxon::OpenApi::ResponseSchemaGenerator.new(response).to_dry_schema
+          schemas[DSL.status_to_code(status)] = schema if schema
+        end
       end
 
       # Check if this endpoint has any before blocks.

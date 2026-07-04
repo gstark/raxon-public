@@ -647,66 +647,86 @@ RSpec.describe Raxon::Request do
   end
 
   describe "#remote_ip" do
-    it "returns X-Forwarded-For IP when present" do
-      rack_request = Rack::MockRequest.env_for(
-        "/test",
-        "REMOTE_ADDR" => "192.168.1.1",
-        "HTTP_X_FORWARDED_FOR" => "203.0.113.1"
-      )
-      rack_req = Rack::Request.new(rack_request)
+    context "by default (trust_proxy_headers disabled)" do
+      it "ignores forgeable X-Forwarded-For and returns the connection IP" do
+        rack_request = Rack::MockRequest.env_for(
+          "/test",
+          "REMOTE_ADDR" => "192.168.1.1",
+          "HTTP_X_FORWARDED_FOR" => "203.0.113.1"
+        )
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
 
-      request = Raxon::Request.new(rack_req)
+        expect(request.remote_ip).to eq("192.168.1.1")
+      end
 
-      expect(request.remote_ip).to eq("203.0.113.1")
+      it "ignores forgeable X-Real-IP and returns the connection IP" do
+        rack_request = Rack::MockRequest.env_for(
+          "/test",
+          "REMOTE_ADDR" => "192.168.1.1",
+          "HTTP_X_REAL_IP" => "203.0.113.1"
+        )
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+        expect(request.remote_ip).to eq("192.168.1.1")
+      end
     end
 
-    it "returns first IP from X-Forwarded-For when multiple IPs present" do
-      rack_request = Rack::MockRequest.env_for(
-        "/test",
-        "REMOTE_ADDR" => "192.168.1.1",
-        "HTTP_X_FORWARDED_FOR" => "203.0.113.1, 198.51.100.1, 192.0.2.1"
-      )
-      rack_req = Rack::Request.new(rack_request)
+    context "when trust_proxy_headers is enabled" do
+      # spec_helper resets configuration in a before hook, so set this in a
+      # before hook too (it runs after the reset).
+      before { Raxon.configuration.trust_proxy_headers = true }
 
-      request = Raxon::Request.new(rack_req)
+      it "returns X-Forwarded-For IP when present" do
+        rack_request = Rack::MockRequest.env_for(
+          "/test",
+          "REMOTE_ADDR" => "192.168.1.1",
+          "HTTP_X_FORWARDED_FOR" => "203.0.113.1"
+        )
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
 
-      expect(request.remote_ip).to eq("203.0.113.1")
-    end
+        expect(request.remote_ip).to eq("203.0.113.1")
+      end
 
-    it "returns X-Real-IP when X-Forwarded-For is not present" do
-      rack_request = Rack::MockRequest.env_for(
-        "/test",
-        "REMOTE_ADDR" => "192.168.1.1",
-        "HTTP_X_REAL_IP" => "203.0.113.1"
-      )
-      rack_req = Rack::Request.new(rack_request)
+      it "returns first IP from X-Forwarded-For when multiple IPs present" do
+        rack_request = Rack::MockRequest.env_for(
+          "/test",
+          "REMOTE_ADDR" => "192.168.1.1",
+          "HTTP_X_FORWARDED_FOR" => "203.0.113.1, 198.51.100.1, 192.0.2.1"
+        )
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
 
-      request = Raxon::Request.new(rack_req)
+        expect(request.remote_ip).to eq("203.0.113.1")
+      end
 
-      expect(request.remote_ip).to eq("203.0.113.1")
-    end
+      it "returns X-Real-IP when X-Forwarded-For is not present" do
+        rack_request = Rack::MockRequest.env_for(
+          "/test",
+          "REMOTE_ADDR" => "192.168.1.1",
+          "HTTP_X_REAL_IP" => "203.0.113.1"
+        )
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
 
-    it "prefers X-Forwarded-For over X-Real-IP" do
-      rack_request = Rack::MockRequest.env_for(
-        "/test",
-        "REMOTE_ADDR" => "192.168.1.1",
-        "HTTP_X_FORWARDED_FOR" => "203.0.113.1",
-        "HTTP_X_REAL_IP" => "198.51.100.1"
-      )
-      rack_req = Rack::Request.new(rack_request)
+        expect(request.remote_ip).to eq("203.0.113.1")
+      end
 
-      request = Raxon::Request.new(rack_req)
+      it "prefers X-Forwarded-For over X-Real-IP" do
+        rack_request = Rack::MockRequest.env_for(
+          "/test",
+          "REMOTE_ADDR" => "192.168.1.1",
+          "HTTP_X_FORWARDED_FOR" => "203.0.113.1",
+          "HTTP_X_REAL_IP" => "198.51.100.1"
+        )
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
 
-      expect(request.remote_ip).to eq("203.0.113.1")
-    end
+        expect(request.remote_ip).to eq("203.0.113.1")
+      end
 
-    it "falls back to standard IP when no proxy headers present" do
-      rack_request = Rack::MockRequest.env_for("/test", "REMOTE_ADDR" => "192.168.1.1")
-      rack_req = Rack::Request.new(rack_request)
+      it "falls back to standard IP when no proxy headers present" do
+        rack_request = Rack::MockRequest.env_for("/test", "REMOTE_ADDR" => "192.168.1.1")
+        request = Raxon::Request.new(Rack::Request.new(rack_request))
 
-      request = Raxon::Request.new(rack_req)
-
-      expect(request.remote_ip).to eq("192.168.1.1")
+        expect(request.remote_ip).to eq("192.168.1.1")
+      end
     end
   end
 
@@ -953,5 +973,41 @@ RSpec.describe Raxon::Request do
 
       expect(request.subdomains).to eq(["a", "b", "c", "d"])
     end
+  end
+end
+
+RSpec.describe Raxon::Request, "host and body edge cases" do
+  it "returns no subdomains for an empty host" do
+    rack_req = Rack::Request.new(Rack::MockRequest.env_for("/test"))
+    allow(rack_req).to receive(:host).and_return("")
+
+    request = Raxon::Request.new(rack_req)
+
+    expect(request.subdomains).to eq([])
+  end
+
+  it "memoizes form params so the body is only parsed once" do
+    env = Rack::MockRequest.env_for(
+      "/users",
+      :method => "POST",
+      :input => "name=Jane",
+      "CONTENT_TYPE" => "application/x-www-form-urlencoded"
+    )
+    request = Raxon::Request.new(Rack::Request.new(env))
+
+    first = request.form_params
+
+    expect(first).to eq(name: "Jane")
+    expect(request.form_params).to equal(first)
+  end
+end
+
+RSpec.describe Raxon::Request, "body handling without an input stream" do
+  it "returns an empty body string when the env has no rack.input" do
+    env = Rack::MockRequest.env_for("/test")
+    env.delete("rack.input")
+    request = Raxon::Request.new(Rack::Request.new(env))
+
+    expect(request.body_string).to eq("")
   end
 end

@@ -1,6 +1,47 @@
 require "spec_helper"
 
 RSpec.describe Raxon::Router do
+  describe "request body size limit" do
+    it "rejects requests whose Content-Length exceeds max_request_body_size", load_routes: true do
+      Raxon.configuration.max_request_body_size = 10
+
+      env = Rack::MockRequest.env_for(
+        "/api/v1/test",
+        :method => "POST",
+        :input => "x" * 50,
+        "CONTENT_TYPE" => "application/json"
+      )
+      status, headers, body = Raxon::Router.new.call(env)
+
+      expect(status).to eq(413)
+      expect(headers["content-type"]).to eq("application/json")
+      expect(body.first).to include("Payload Too Large")
+    end
+
+    it "allows requests within the limit", load_routes: true do
+      Raxon.configuration.max_request_body_size = 1_000
+
+      env = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
+      status, = Raxon::Router.new.call(env)
+
+      expect(status).to eq(200)
+    end
+
+    it "does not enforce a limit when max_request_body_size is nil", load_routes: true do
+      Raxon.configuration.max_request_body_size = nil
+
+      env = Rack::MockRequest.env_for(
+        "/api/v1/test",
+        :method => "POST",
+        :input => "x" * 5_000,
+        "CONTENT_TYPE" => "application/json"
+      )
+      status, = Raxon::Router.new.call(env)
+
+      expect(status).not_to eq(413)
+    end
+  end
+
   describe "#call" do
     it "routes requests to registered endpoints", load_routes: true do
       env = Rack::MockRequest.env_for("/api/v1/test", method: "GET")
@@ -765,5 +806,30 @@ RSpec.describe Raxon::Router do
         expect(request_rack_objects.first).to eq(request.object_id)
       end
     end
+  end
+end
+
+RSpec.describe Raxon::Router, "debug logging" do
+  it "logs request lifecycle to stderr when RAXON_DEBUG is set" do
+    define_route("routes/ping/get.rb") do |endpoint|
+      endpoint.handler { |_request, response| response.ok success: true }
+    end
+
+    env = Rack::MockRequest.env_for("/ping")
+
+    ENV["RAXON_DEBUG"] = "1"
+    expect { Raxon::Router.new.call(env) }.to output(/Returning: status=200/).to_stderr
+  ensure
+    ENV.delete("RAXON_DEBUG")
+  end
+
+  it "stays silent when RAXON_DEBUG is not set" do
+    define_route("routes/ping/get.rb") do |endpoint|
+      endpoint.handler { |_request, response| response.ok success: true }
+    end
+
+    env = Rack::MockRequest.env_for("/ping")
+
+    expect { Raxon::Router.new.call(env) }.not_to output.to_stderr
   end
 end

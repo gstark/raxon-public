@@ -30,6 +30,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency "alba", "~> 3"
   spec.add_dependency "dry-initializer", "~> 3"
   spec.add_dependency "dry-schema", "~> 1"
+  spec.add_dependency "erubi", "~> 1"
   spec.add_dependency "mustermann", "~> 3"
   spec.add_dependency "ostruct", "~> 0"
   spec.add_dependency "rack", "~> 3"

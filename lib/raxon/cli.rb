@@ -29,6 +29,13 @@ module Raxon
       Raxon::RoutesCommand.new(options).execute
     end
 
+    desc "generate TYPE ARGS...", "Generate project files (e.g. raxon generate route api/v1/users get post)"
+    def generate(type, *args)
+      require_relative "cli/generate_command"
+      Raxon::GenerateCommand.new(type, args, options).execute
+    end
+    map "g" => "generate"
+
     desc "version", "Show Raxon version"
     def version
       puts "Raxon #{Raxon::VERSION}"

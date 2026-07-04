@@ -50,15 +50,22 @@ module Raxon
       private
 
       def build_payload(request, endpoint)
+        filter = parameter_filter
+        raw_headers = request.rack_request.env.select { |k, _| k.start_with?("HTTP_") }
+
         {
           controller: controller_from_endpoint(endpoint),
           action: request.rack_request.request_method,
-          params: request.params.to_h,
-          headers: request.rack_request.env.select { |k, _| k.start_with?("HTTP_") },
+          params: filter.filter(request.params.to_h),
+          headers: filter.filter_headers(raw_headers),
           format: :json,
           method: request.rack_request.request_method,
           path: request.rack_request.path
         }
+      end
+
+      def parameter_filter
+        Raxon::ParameterFilter.new(Raxon.configuration.filter_parameters || [])
       end
     end
   end

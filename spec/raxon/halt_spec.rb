@@ -210,3 +210,18 @@ RSpec.describe "Response#halt" do
     end
   end
 end
+
+RSpec.describe "halt from a catchall handler" do
+  it "returns the halted response for unmatched routes" do
+    Raxon::RouteLoader.register_catchall do |endpoint|
+      endpoint.handler do |_request, response, _metadata|
+        response.halt(code: :service_unavailable, body: {error: "maintenance"})
+      end
+    end
+
+    status, _headers, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/no/such/route"))
+
+    expect(status).to eq(503)
+    expect(JSON.parse(body.first)).to eq("error" => "maintenance")
+  end
+end

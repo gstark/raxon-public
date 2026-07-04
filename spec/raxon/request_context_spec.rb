@@ -101,3 +101,84 @@ RSpec.describe "request context lifecycle integration" do
     expect(observed[4]).to eq(via_metadata: true, via_context: true)
   end
 end
+
+RSpec.describe Raxon::RequestContext, "hash-like API" do
+  let(:context) { described_class.new(user: "alice", role: "admin") }
+
+  describe "#fetch" do
+    it "returns stored values and normalizes string keys" do
+      expect(context.fetch(:user)).to eq("alice")
+      expect(context.fetch("user")).to eq("alice")
+    end
+
+    it "supports defaults and fallback blocks like Hash#fetch" do
+      expect(context.fetch(:missing, "default")).to eq("default")
+      expect(context.fetch(:missing) { |key| "no #{key}" }).to eq("no missing")
+    end
+
+    it "raises KeyError when the key is missing and no fallback is given" do
+      expect { context.fetch(:missing) }.to raise_error(KeyError)
+    end
+  end
+
+  describe "#delete" do
+    it "removes the value and returns it" do
+      expect(context.delete("user")).to eq("alice")
+      expect(context.key?(:user)).to be(false)
+    end
+
+    it "returns nil for absent keys" do
+      expect(context.delete(:missing)).to be_nil
+    end
+  end
+
+  describe "#each" do
+    it "yields key/value pairs and returns the context" do
+      seen = {}
+
+      result = context.each { |key, value| seen[key] = value }
+
+      expect(seen).to eq(user: "alice", role: "admin")
+      expect(result).to be(context)
+    end
+
+    it "returns an enumerator when no block is given" do
+      expect(context.each).to be_a(Enumerator)
+      expect(context.each.to_a).to eq([[:user, "alice"], [:role, "admin"]])
+    end
+
+    it "supports Enumerable methods" do
+      expect(context.map { |key, _value| key }).to eq([:user, :role])
+    end
+  end
+
+  describe "#empty?, #keys, #values" do
+    it "reflects the stored data" do
+      expect(context.empty?).to be(false)
+      expect(context.keys).to eq([:user, :role])
+      expect(context.values).to eq(["alice", "admin"])
+      expect(described_class.new.empty?).to be(true)
+    end
+  end
+
+  describe "#dup" do
+    it "copies the data so writes do not leak back to the original" do
+      copy = context.dup
+      copy[:user] = "bob"
+
+      expect(copy[:user]).to eq("bob")
+      expect(context[:user]).to eq("alice")
+    end
+  end
+
+  describe "method-style access edge cases" do
+    it "raises NoMethodError for missing keys to catch typos" do
+      expect { context.curent_user }.to raise_error(NoMethodError)
+      expect(context.respond_to?(:curent_user)).to be(false)
+    end
+
+    it "raises NoMethodError for reader calls with arguments" do
+      expect { context.user("extra") }.to raise_error(NoMethodError)
+    end
+  end
+end

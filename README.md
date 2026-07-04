@@ -15,6 +15,10 @@ A lightweight, Rack 3 compatible JSON API framework for Ruby with file-based rou
 - 🌐 **Multi-Format** - JSON APIs and HTML rendering with ERB templates
 - ⚡ **Response Control** - Early termination with `halt`, custom headers, and status codes
 - 🔄 **All-Method Routes** - `all.rb` files handle all HTTP methods for cross-cutting concerns
+- 📐 **Correct HTTP Semantics** - Automatic `405 Method Not Allowed` (with `Allow`), HEAD from GET, and OPTIONS responses
+- 🗜️ **Conditional GET** - `response.etag` / `response.last_modified` helpers with automatic `304 Not Modified`
+- 🔐 **Security Schemes** - Declare OpenAPI security schemes once; optionally enforce them at runtime
+- 🧪 **Test Helpers** - `Raxon::Test` request helpers and an RSpec matcher that validates responses against your declared schemas
 
 ## Quick Start
 
@@ -209,10 +213,21 @@ Raxon.configure do |config|
 end
 
 # app/handlers/concerns/authentication_helpers.rb
+require "rack/utils"
+
 module Raxon::HandlerHelpers
   def authenticate!(request)
     token = request.rack_request.get_header("HTTP_AUTHORIZATION")
     raise "Unauthorized" unless valid_token?(token)
+  end
+
+  def valid_token?(token)
+    return false if token.nil? || token.empty?
+
+    # Compare in constant time. A plain `token == ENV["API_TOKEN"]` leaks the
+    # secret one byte at a time through timing; always use secure_compare for
+    # tokens, API keys, signatures, and password hashes.
+    Rack::Utils.secure_compare(token, ENV.fetch("API_TOKEN"))
   end
 
   def current_user(request)
@@ -375,6 +390,9 @@ Raxon.route do |endpoint|
   endpoint.handler do |request, response|
     api_key = request.rack_request.get_header("HTTP_X_API_KEY")
 
+    # Look the key up by a hashed/indexed column and compare in constant time
+    # (see valid_token? above). Never interpolate the key into SQL or compare
+    # secrets with ==.
     unless valid_api_key?(api_key)
       response.code = :unauthorized
       response.body = { error: "Invalid or missing API key" }
@@ -382,7 +400,7 @@ Raxon.route do |endpoint|
     end
 
     # Store authenticated user for later use
-    request.env["current_user"] = User.find_by_api_key(api_key)
+    request.context.current_user = authenticate_api_key(api_key)
   end
 end
 ```
@@ -409,13 +427,24 @@ end
 
 ```ruby
 # routes/api/all.rb
+#
+# SECURITY: Do NOT use `Access-Control-Allow-Origin: *` for an API that requires
+# authentication — it lets any website on the internet make credentialed calls on
+# your users' behalf. Echo back only origins you explicitly allow.
+ALLOWED_ORIGINS = ["https://app.example.com", "https://admin.example.com"].freeze
+
 Raxon.route do |endpoint|
-  endpoint.description "Set CORS headers for all API endpoints"
+  endpoint.description "Set CORS headers for allowed origins"
 
   endpoint.handler do |request, response|
-    response.header "Access-Control-Allow-Origin", "*"
-    response.header "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
-    response.header "Access-Control-Allow-Headers", "Content-Type, Authorization"
+    origin = request.rack_request.get_header("HTTP_ORIGIN")
+
+    if ALLOWED_ORIGINS.include?(origin)
+      response.header "Access-Control-Allow-Origin", origin
+      response.header "Vary", "Origin"
+      response.header "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
+      response.header "Access-Control-Allow-Headers", "Content-Type, Authorization"
+    end
 
     # Handle OPTIONS preflight requests
     if request.rack_request.request_method == "OPTIONS"
@@ -425,6 +454,8 @@ Raxon.route do |endpoint|
   end
 end
 ```
+
+For anything beyond the basics, prefer the maintained [`rack-cors`](https://github.com/cyu/rack-cors) middleware over hand-rolled headers.
 
 **4. Rate Limiting**
 
@@ -588,6 +619,46 @@ endpoint.handler do |_request, response|
 end
 ```
 
+## HTTP Semantics
+
+Raxon answers protocol-level requests correctly without any per-route code:
+
+- **405 Method Not Allowed** — when a path exists but the requested method has no route, the router responds `405` with an `Allow` header listing the methods that would succeed (instead of a misleading 404). A configured catchall route or fallback app still takes precedence.
+- **Automatic HEAD** — a `HEAD` request to a path with only a `get.rb` runs the GET handler and strips the body, per RFC 9110. An explicit `head.rb` or `all.rb` always wins.
+- **Automatic OPTIONS** — an `OPTIONS` request to a known path with no `options.rb`/`all.rb` gets a `204` with the `Allow` header. Define your own `options.rb` (e.g. for CORS preflight) to take over.
+
+### Custom 404 Responses
+
+Override the default `{"error":"Not Found"}` body without defining a catchall route:
+
+```ruby
+Raxon.configure do |config|
+  config.not_found do |request, response|
+    response.body = {error: "No such endpoint", path: request.rack_request.path}
+  end
+end
+```
+
+The block receives the unmatched `Raxon::Request` and a `Raxon::Response` preloaded with the default 404; change the body, headers, or status as needed.
+
+### Conditional GET (ETag / Last-Modified)
+
+Handlers can make responses cacheable and skip work when the client is already up to date. Both helpers set the header and — for GET/HEAD requests — halt with `304 Not Modified` when the request's `If-None-Match` / `If-Modified-Since` indicates freshness:
+
+```ruby
+endpoint.handler do |request, response|
+  user = find_user(request.params[:id])
+
+  response.etag user.cache_key          # weak ETag (W/"...") by default
+  response.last_modified user.updated_at
+
+  # Only reached when the client's copy is stale
+  response.ok user.as_json
+end
+```
+
+Use `response.etag value, weak: false` for byte-identical (strong) validators. On non-GET/HEAD requests only the headers are set; no 304 is issued.
+
 ## Validation
 
 ### Request Parameter Validation
@@ -720,7 +791,7 @@ endpoint.validate_response true
 
 ### Automatic Generation
 
-Generate OpenAPI 3.0 specification from your route definitions:
+Generate the OpenAPI specification from your route definitions:
 
 ```bash
 bundle exec rake openapi:generate
@@ -730,6 +801,8 @@ This creates:
 
 - `doc/apidoc/api.json` - OpenAPI specification
 - `doc/apidoc/api.html` - Swagger UI documentation
+
+The document is OpenAPI **3.1** by default (nullable fields are emitted as `type: ["string", "null"]` arrays per JSON Schema). Set `config.openapi_spec_version = "3.0"` to emit OpenAPI 3.0.0 with the legacy `nullable: true` keyword instead.
 
 ### Operation Metadata
 
@@ -746,6 +819,34 @@ endpoint.security :oauth2, scopes: ["users:read"]
 ```
 
 The concise `Raxon.route` DSL supports the same methods without the `endpoint.` prefix.
+
+### Security Schemes
+
+Declare reusable security schemes once; they are emitted under `components.securitySchemes` and referenced by `endpoint.security`:
+
+```ruby
+# config/app.rb (or anywhere loaded at boot)
+Raxon::OpenApi::DSL.security_scheme(:api_key, type: :apiKey, name: "X-API-Key", in: :header)
+Raxon::OpenApi::DSL.security_scheme(:bearer, type: :http, scheme: :bearer, bearer_format: "JWT")
+
+# In a route file
+endpoint.security :api_key
+```
+
+Supported types: `:apiKey`, `:http`, `:oauth2` (pass `flows:`), and `:openIdConnect` (pass `open_id_connect_url:`).
+
+**Runtime enforcement.** Give a scheme an authenticator block and every endpoint that declares it is enforced automatically — the block runs after metadata blocks and before `before` blocks, and a falsy return produces `401 {"error":"Unauthorized"}` without running the handler:
+
+```ruby
+Raxon::OpenApi::DSL.security_scheme(:api_key, type: :apiKey, name: "X-API-Key", in: :header) do |request, metadata, scopes|
+  key = request.header("HTTP_X_API_KEY").to_s
+  user = User.find_by_api_key(key)
+  metadata[:current_user] = user if user
+  user # truthy grants access
+end
+```
+
+Standard OpenAPI semantics apply: `endpoint.security [{api_key: []}, {bearer: []}]` grants access when **any** requirement passes, and all schemes within one requirement must pass. Schemes without an authenticator block are documentation-only, so existing `endpoint.security` declarations keep working unchanged.
 
 ### Specification Isolation
 
@@ -830,7 +931,26 @@ end
 - `on_error` - Callback proc for error handling (receives error and Rack env)
 - `openapi_title` - Title for OpenAPI documentation
 - `openapi_description` - Description for OpenAPI documentation
-- `openapi_version` - API version for OpenAPI documentation
+- `openapi_version` - API version for OpenAPI documentation (the `info.version` field)
+- `openapi_spec_version` - OpenAPI document version to emit: `"3.1"` (default) or `"3.0"`
+- `logger` - Application logger (default: `nil`). When set, `Raxon::Server` logs every request through `Rack::CommonLogger` and `Raxon::ErrorHandler` (when used) logs unhandled exceptions to it.
+- `not_found` - Block customizing the 404 response for unmatched requests (see [HTTP Semantics](#http-semantics))
+- `reload_routes` - Route hot reloading: `nil` (default) enables it in development only; `true`/`false` force it on or off (see [Hot Reloading](#hot-reloading))
+- `filter_parameters` - Array of name fragments (strings/symbols) or `Regexp`s whose values are redacted from instrumentation/APM payloads. Defaults to common secret names (`password`, `token`, `secret`, `api_key`, `authorization`, `cookie`, `access_token`, `refresh_token`, …). Add your app's sensitive field names here.
+- `trust_proxy_headers` - Whether `request.remote_ip` may honor the client-supplied `X-Forwarded-For` / `X-Real-IP` headers (default: `false`). Leave `false` unless Raxon runs behind a reverse proxy you control that overwrites these headers — otherwise any client can spoof its IP. See [Security](#security).
+- `max_request_body_size` - Reject requests whose `Content-Length` exceeds this many bytes with `413 Payload Too Large`, before the body is read into memory (default: `nil`, no limit). This is a cheap first guard; for untrusted traffic also cap body size at your proxy/load balancer.
+
+### Security
+
+Raxon is an unopinionated micro-framework: it gives you the primitives but does not silently add protections, so a few things are your responsibility. The defaults are chosen to fail safe.
+
+- **Client IP** — `request.remote_ip` returns the non-forgeable connection peer by default. Only set `trust_proxy_headers = true` when a trusted proxy overwrites the forwarding headers; otherwise `X-Forwarded-For` is attacker-controlled and must not be used for rate limiting, allowlists, or audit logs.
+- **Secrets in telemetry** — the Rails-compatible instrumentation payload is scrubbed via `filter_parameters` before it reaches APM tools. Extend the list with any sensitive fields specific to your API.
+- **Request size** — set `max_request_body_size` (and a proxy-level limit) to bound memory use from large bodies.
+- **HTML output** — `response.html`/`.html_body` render templates with Erubi and **escape `<%= %>` by default**; use `<%== %>` only for values you have already sanitized.
+- **Auth** — compare tokens/API keys with `Rack::Utils.secure_compare` (constant time), never `==`. See the Authentication example under Common Patterns.
+- **CORS** — never send `Access-Control-Allow-Origin: *` on an authenticated API; echo back only allowlisted origins (or use `rack-cors`).
+- **Transport & headers** — terminate TLS and add security headers (HSTS, `X-Content-Type-Options`, CSP for HTML endpoints) at your proxy or via Rack middleware; Raxon does not set them for you.
 
 **Accessing the root path:**
 
@@ -980,10 +1100,11 @@ server = Raxon::Server.new do |app|
   app.use Rack::Logger
   app.use Rack::CommonLogger
 
-  # CORS (if needed)
+  # CORS (if needed) — list only the origins you trust, never '*' on an
+  # authenticated API.
   # app.use Rack::Cors do
   #   allow do
-  #     origins '*'
+  #     origins 'https://app.example.com'
   #     resource '*', headers: :any, methods: [:get, :post, :put, :delete]
   #   end
   # end
@@ -1059,6 +1180,23 @@ end
 
 ## Development
 
+### Hot Reloading
+
+In the development environment, route files reload automatically — edit a route, its `.html.erb` template, or a helper under `helpers_path`, and the next request serves the new code. No server restart needed.
+
+Raxon watches the configured routes directories (and `helpers_path`) and performs a full route reload when any watched file is added, changed, or removed. Programmatic boot state survives: the catchall endpoint, OpenAPI components, security schemes, and configuration blocks are all preserved, and the generated OpenAPI document does not accumulate duplicates. A syntax error in a changed file surfaces on the request that triggered the reload; fix the file and the next request recovers.
+
+Reloading is on only when `Raxon.env` is `development`. Override in either direction:
+
+```ruby
+Raxon.configure do |config|
+  config.reload_routes = false  # opt out in development
+  config.reload_routes = true   # force on elsewhere (not recommended in production)
+end
+```
+
+Because a reload re-evaluates every route file, keep route files self-contained (which the isolated per-file execution context already encourages).
+
 ### Running Tests
 
 ```bash
@@ -1091,6 +1229,23 @@ bundle exec standardrb --fix
 bundle exec rake standard
 bundle exec rake standard:fix
 ```
+
+### Generating Routes
+
+Scaffold route files with the CLI (also available as `raxon g`):
+
+```bash
+# GET route (default method)
+bundle exec raxon generate route api/v1/users
+
+# Multiple methods at once
+bundle exec raxon generate route api/v1/users get post
+
+# Path parameters ({id}, :id, and $id are normalized to dunder style)
+bundle exec raxon generate route api/v1/users/__id__ get
+```
+
+Each generated file contains a `Raxon.route` block with a description stub, `path_param` declarations for any parameter segments, a 200 response schema stub, and a handler. Existing files are never overwritten.
 
 ### Viewing Routes
 
@@ -1264,28 +1419,48 @@ end
 
 ### Testing Endpoints
 
+Raxon ships test helpers (not loaded by `require "raxon"`). RSpec users get request helpers plus a matcher that validates response bodies against the schemas declared in your route files:
+
 ```ruby
-# spec/api/users_spec.rb
-require "spec_helper"
+# spec/spec_helper.rb
+require "raxon/test/rspec"
 
-RSpec.describe "GET /api/v1/users" do
-  it "returns list of users" do
-    routes_dir = File.join(__dir__, "..", "fixtures", "routes")
-    Raxon.configure { |config| config.routes_directory = routes_dir }
+RSpec.configure do |config|
+  config.include Raxon::Test::Methods
 
-    server = Raxon::Server.new
-
-    env = Rack::MockRequest.env_for("/api/v1/users", method: "GET")
-    status, headers, body = server.call(env)
-
-    expect(status).to eq(200)
-    expect(headers["content-type"]).to eq("application/json")
-
-    parsed = JSON.parse(body.first)
-    expect(parsed).to have_key("users")
+  config.before(:each) do
+    Raxon.configure { |c| c.routes_directory = "routes" }
+    Raxon::RouteLoader.reset!
+    Raxon::RouteLoader.load!
   end
 end
 ```
+
+```ruby
+# spec/api/users_spec.rb
+RSpec.describe "users API" do
+  it "lists users" do
+    get "/api/v1/users", params: {page: 2}, headers: {"X-API-Key" => "secret"}
+
+    expect(last_response.status).to eq(200)
+    expect(last_response.json).to eq({"users" => [], "page" => 2})
+    expect(last_response).to conform_to_response_schema(200)
+  end
+
+  it "creates a user" do
+    post "/api/v1/users", json: {name: "Alice"}
+
+    expect(last_response).to conform_to_response_schema(201)
+  end
+end
+```
+
+- `get`/`post`/`put`/`patch`/`delete`/`head`/`options` accept `params:` (query or form), `json:` (JSON body + content type), `body:` (raw body), and `headers:` (friendly `"X-API-Key"` names or raw `"HTTP_X_API_KEY"` keys).
+- `last_response` exposes `status`, `headers`, `body`, `json(symbolize_names: false)`, and case-insensitive header lookup via `last_response["Content-Type"]`.
+- `conform_to_response_schema(status = nil)` fails with a precise message when the status differs, no route matches, the endpoint declares no schema for that status, or the body violates the declared schema.
+- The app under test defaults to `Raxon::Server.new`; define your own `app` method to customize.
+
+Non-RSpec frameworks can `require "raxon/test"` for the helpers without the matcher, or drive the server directly with `Rack::MockRequest.env_for` + `server.call(env)`.
 
 ## Contributing
 

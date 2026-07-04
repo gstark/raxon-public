@@ -224,3 +224,93 @@ RSpec.describe Raxon::RoutesFormatter do
     $stdout = original_stdout
   end
 end
+
+RSpec.describe Raxon::RoutesFormatter, "column formatting" do
+  def capture_stdout
+    original = $stdout
+    $stdout = StringIO.new
+    yield
+    $stdout.string
+  ensure
+    $stdout = original
+  end
+
+  before do
+    allow(Raxon::RouteLoader).to receive(:reset!)
+    allow(Raxon::RouteLoader).to receive(:load!)
+  end
+
+  it "truncates long descriptions to keep the table readable" do
+    define_route("routes/api/v1/reports/get.rb") do |endpoint|
+      endpoint.description "Generates the quarterly financial report with all appendices"
+      endpoint.handler { |_request, response| response.ok }
+    end
+
+    output = capture_stdout { described_class.display }
+
+    expect(output).to include("Generates the quarterly fin...")
+    expect(output).not_to include("appendices")
+  end
+
+  it "shows a dash for routes without a handler" do
+    define_route("routes/api/v1/stub/get.rb") do |endpoint|
+      endpoint.description "Declared but not implemented"
+    end
+
+    output = capture_stdout { described_class.display }
+
+    handler_row = output.lines.find { |line| line.include?("/api/v1/stub") }
+    expect(handler_row).to include("-")
+  end
+
+  it "shows an empty file column when the route file path is unknown" do
+    define_route("routes/api/v1/anon/get.rb") do |endpoint|
+      endpoint.route_file_path = nil
+      endpoint.handler { |_request, response| response.ok }
+    end
+
+    output = capture_stdout { described_class.display }
+
+    anon_row = output.lines.find { |line| line.include?("/api/v1/anon") }
+    expect(anon_row).not_to include("routes/")
+  end
+
+  it "shows the absolute path for files outside the routes directory" do
+    define_route("routes/api/v1/external/get.rb") do |endpoint|
+      endpoint.route_file_path = "/somewhere/else/get.rb"
+      endpoint.handler { |_request, response| response.ok }
+    end
+
+    output = capture_stdout { described_class.display }
+
+    expect(output).to include("/somewhere/else/get.rb")
+  end
+end
+
+RSpec.describe Raxon::RoutesFormatter, "TTY output" do
+  it "enables table resizing when writing to a terminal" do
+    define_route("routes/api/v1/users/get.rb") do |endpoint|
+      endpoint.description "Get all users"
+      endpoint.handler { |_request, response| response.ok }
+    end
+    allow(Raxon::RouteLoader).to receive(:reset!)
+    allow(Raxon::RouteLoader).to receive(:load!)
+
+    # Quacks like a terminal: tty? true, but ioctl reports no window size so
+    # TTY::Screen falls back to its default width.
+    tty_out = Class.new(StringIO) {
+      def tty? = true
+
+      def ioctl(*) = -1
+    }.new
+    original = $stdout
+    begin
+      $stdout = tty_out
+      described_class.display
+    ensure
+      $stdout = original
+    end
+
+    expect(tty_out.string).to include("/api/v1/users")
+  end
+end

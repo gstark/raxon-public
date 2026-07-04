@@ -192,3 +192,43 @@ RSpec.describe Raxon::ParamResolver do
     end
   end
 end
+
+RSpec.describe Raxon::ParamResolver, "header normalization" do
+  def sources(query: {}, form: {}, json: {}, path: {}, headers: {}, cookies: {}, json_parse_error: false)
+    described_class::Sources.new(
+      query: query, form: form, json: json, path: path,
+      headers: headers, cookies: cookies, json_parse_error: json_parse_error
+    )
+  end
+
+  def echo_schema
+    double("schema").tap do |s|
+      allow(s).to receive(:call) { |params| double("result", success?: true, to_h: params) }
+    end
+  end
+
+  it "finds a header stored without the HTTP_ prefix via the capitalized-dash form" do
+    parameter = Raxon::OpenApi::Parameter.new(:x_api_key, type: :string, in: :header)
+    resolver = described_class.new(parameters: [parameter], schema: echo_schema)
+
+    result = resolver.resolve(sources(headers: {"X_API_KEY" => "secret"}))
+
+    expect(result.params[:x_api_key]).to eq("secret")
+  end
+end
+
+RSpec.describe Raxon::ParamResolver, "unrecognized in: locations" do
+  it "falls back to the merged params for locations it does not isolate" do
+    parameter = Raxon::OpenApi::Parameter.new(:payload, type: :string, in: :body)
+    echo_schema = double("schema")
+    allow(echo_schema).to receive(:call) { |params| double("result", success?: true, to_h: params) }
+    resolver = described_class.new(parameters: [parameter], schema: echo_schema)
+
+    sources = described_class::Sources.new(
+      query: {}, form: {}, json: {payload: "from-body"}, path: {},
+      headers: {}, cookies: {}, json_parse_error: false
+    )
+
+    expect(resolver.resolve(sources).params[:payload]).to eq("from-body")
+  end
+end

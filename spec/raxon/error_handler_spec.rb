@@ -234,3 +234,24 @@ RSpec.describe Raxon::ErrorHandler do
     end
   end
 end
+
+RSpec.describe Raxon::ErrorHandler, "logging errors without backtraces" do
+  it "logs the error without crashing when no backtrace is available" do
+    # Foreign/C-extension exceptions can carry no backtrace; the logger must
+    # not assume one exists.
+    backtrace_less = Class.new(StandardError) do
+      def backtrace
+        nil
+      end
+    end
+    app = ->(_env) { raise backtrace_less, "boom" }
+    log = StringIO.new
+    middleware = Raxon::ErrorHandler.new(app, logger: Logger.new(log))
+
+    status, _headers, _body = middleware.call(Rack::MockRequest.env_for("/test"))
+
+    expect(status).to eq(500)
+    expect(log.string).to include("boom")
+    expect(log.string).not_to include("Backtrace")
+  end
+end

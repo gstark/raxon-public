@@ -503,3 +503,101 @@ RSpec.describe Raxon::Routes do
     end
   end
 end
+
+RSpec.describe Raxon::Routes, "ALL routes" do
+  let(:routes) { described_class.new }
+  let(:all_endpoint) { Raxon::OpenApi::Endpoint.new }
+
+  it "matches every HTTP method for an ALL registration" do
+    routes.register("ALL", "/admin", all_endpoint)
+
+    %w[GET POST PUT PATCH DELETE].each do |method|
+      result = routes.find(method, "/admin")
+      expect(result).not_to be_nil
+      expect(result[:endpoint]).to eq(all_endpoint)
+    end
+  end
+
+  it "lists ALL registrations under the ALL method key" do
+    routes.register("ALL", "/admin", all_endpoint)
+
+    expect(routes.all.keys).to include(method: "ALL", path: "/admin")
+  end
+
+  it "raises a collision when two ALL endpoints claim the same path" do
+    conflicting = Raxon::OpenApi::Endpoint.new
+    all_endpoint.route_file_path = "routes/admin/all.rb"
+    conflicting.route_file_path = "routes/admin/all_copy.rb"
+
+    routes.register("ALL", "/admin", all_endpoint)
+
+    expect { routes.register("ALL", "/admin", conflicting) }
+      .to raise_error(Raxon::Error, %r{ALL /admin.*all_copy\.rb.*all\.rb}m)
+  end
+
+  it "matches dynamic ALL routes and extracts path params" do
+    routes.register("ALL", "/users/{id}", all_endpoint)
+
+    result = routes.find("DELETE", "/users/42")
+
+    expect(result).not_to be_nil
+    expect(result[:endpoint]).to eq(all_endpoint)
+    expect(result[:params]).to eq(id: "42")
+  end
+
+  it "prefers a method-specific dynamic route over a dynamic ALL route" do
+    get_endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/users/{id}", all_endpoint)
+    routes.register("GET", "/users/{id}", get_endpoint)
+
+    expect(routes.find("GET", "/users/42")[:endpoint]).to eq(get_endpoint)
+    expect(routes.find("POST", "/users/42")[:endpoint]).to eq(all_endpoint)
+  end
+end
+
+RSpec.describe Raxon::Routes, "dynamic route scanning" do
+  let(:routes) { described_class.new }
+
+  it "keeps scanning dynamic ALL entries until one matches" do
+    orgs_endpoint = Raxon::OpenApi::Endpoint.new
+    users_endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/orgs/{org_id}", orgs_endpoint)
+    routes.register("ALL", "/users/{id}", users_endpoint)
+
+    expect(routes.find("GET", "/users/7")[:endpoint]).to eq(users_endpoint)
+    expect(routes.find("GET", "/orgs/7")[:endpoint]).to eq(orgs_endpoint)
+    expect(routes.find("GET", "/teams/7")).to be_nil
+  end
+end
+
+RSpec.describe Raxon::Routes, "unusual registrations" do
+  let(:routes) { described_class.new }
+
+  it "routes paths registered without a leading slash" do
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "users", endpoint)
+
+    result = routes.find("GET", "users")
+
+    expect(result[:endpoint]).to eq(endpoint)
+    expect(result[:endpoints]).to eq([endpoint])
+  end
+
+  it "does not duplicate an endpoint registered at multiple hierarchy levels" do
+    shared = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/api", shared)
+    routes.register("GET", "/api/users", shared)
+
+    result = routes.find("GET", "/api/users")
+
+    expect(result[:endpoints]).to eq([shared])
+  end
+
+  it "omits optional path segments that did not match" do
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/files/{name}?", endpoint)
+
+    expect(routes.find("GET", "/files/report")[:params]).to eq(name: "report")
+    expect(routes.find("GET", "/files/")[:params]).to eq({})
+  end
+end

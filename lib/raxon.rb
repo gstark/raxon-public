@@ -6,6 +6,7 @@ require "mustermann"
 require "ostruct"
 require "pathname"
 require "rack"
+require "time"
 
 # Active Support dependencies
 require "active_support/core_ext/enumerable"
@@ -21,6 +22,7 @@ require_relative "raxon/open_api/parameters"
 require_relative "raxon/open_api/property"
 require_relative "raxon/open_api/request_body"
 require_relative "raxon/open_api/error"
+require_relative "raxon/open_api/security_scheme"
 
 # Load all OpenApi related files
 require_relative "raxon/open_api/dsl"
@@ -31,15 +33,14 @@ require_relative "raxon/open_api/file_upload_validator"
 require_relative "raxon/open_api/request_schema_generator"
 require_relative "raxon/open_api/response_schema_generator"
 
-# Load rake tasks automatically
-Dir[File.join(__dir__, "openapi-dsl", "tasks", "**", "*.rake")].each { |ext| load ext } if defined?(Rake)
-
 # Load Raxon components
 require_relative "raxon/cli"
 require_relative "raxon/configuration"
 require_relative "raxon/error_handler"
 require_relative "raxon/handler_helpers"
 require_relative "raxon/instrumentation"
+require_relative "raxon/template"
+require_relative "raxon/parameter_filter"
 require_relative "raxon/request_context"
 require_relative "raxon/param_resolver"
 require_relative "raxon/request"
@@ -47,6 +48,7 @@ require_relative "raxon/response"
 require_relative "raxon/endpoint_invocation"
 require_relative "raxon/routes"
 require_relative "raxon/route_loader"
+require_relative "raxon/route_reloader"
 require_relative "raxon/route_dsl"
 require_relative "raxon/router"
 require_relative "raxon/server"
@@ -106,7 +108,9 @@ module Raxon
 
   # Load all Raxon rake tasks
   def self.load_tasks
-    Dir[File.join(__dir__, "tasks", "**", "*.rake")].each { |task| load task } if defined?(Rake)
+    require "rake"
+
+    Dir[File.join(__dir__, "tasks", "**", "*.rake")].each { |task| load task }
   end
 
   # Load handler helpers from the configured helpers_path.
@@ -134,6 +138,17 @@ module Raxon
     end
 
     @helpers_loaded = true
+  end
+
+  # Re-load handler helpers from the configured helpers_path.
+  #
+  # Files are loaded with `load`, so reopened HandlerHelpers methods are
+  # redefined in place. Used by RouteReloader in development.
+  #
+  # @return [void]
+  def self.reload_helpers
+    @helpers_loaded = false
+    load_helpers
   end
 
   # Returns the current environment name.

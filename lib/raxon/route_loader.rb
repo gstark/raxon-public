@@ -402,7 +402,7 @@ module Raxon
         return unless File.exist?(template_path)
 
         template_content = File.read(template_path)
-        endpoint.erb_template = ERB.new(template_content)
+        endpoint.erb_template = Raxon::Template.new(template_content)
       end
     end
 

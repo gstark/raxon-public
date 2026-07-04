@@ -6,6 +6,10 @@ module Raxon
   class Routes
     include Enumerable
 
+    # HTTP methods a route can be served with, in the canonical order used for
+    # Allow headers.
+    SUPPORTED_METHODS = %w[GET HEAD POST PUT PATCH DELETE OPTIONS].freeze
+
     # Initialize a new Routes collection.
     def initialize
       @entries_by_path = {}
@@ -64,6 +68,23 @@ module Raxon
       end
 
       find_pattern_match(method, path)
+    end
+
+    # HTTP methods that can serve the given request path, in canonical order.
+    #
+    # Includes HEAD when a GET route exists (served by the automatic HEAD
+    # fallback) and OPTIONS whenever the path exists at all (served by the
+    # router's automatic OPTIONS response). Used for 405 Allow headers and
+    # automatic OPTIONS responses.
+    #
+    # @param path [String] Request path
+    # @return [Array<String>] Uppercase method names, empty if the path matches no route
+    def allowed_methods(path)
+      methods = matching_entries(path).flat_map { |entry| entry_methods(entry) }
+      return [] if methods.empty?
+
+      methods << "OPTIONS"
+      SUPPORTED_METHODS & methods
     end
 
     # Get all registered routes in the legacy keyed shape.
@@ -142,7 +163,7 @@ module Raxon
     end
 
     def prepare_entry_routes(entry)
-      %w[GET POST PUT PATCH DELETE HEAD OPTIONS].each do |method|
+      SUPPORTED_METHODS.each do |method|
         endpoint = entry[:methods][method] || entry[:all]
         next unless endpoint
 
@@ -151,26 +172,44 @@ module Raxon
           endpoints: endpoint_hierarchy(entry[:path], method, endpoint)
         }
       end
+
+      prepare_head_fallback(entry)
     end
 
-    # Build route data with the endpoint hierarchy for the given path.
-    #
-    # Collects all matching parent route entries and returns them sorted by depth,
-    # allowing before blocks to execute in order. At each level, checks for all.rb
-    # endpoints first, then method-specific endpoints.
-    #
-    # @param final_route_data [Hash] The route data for the most specific path
-    # @param method [String] HTTP method
-    # @return [Hash] Route data with endpoints array
-    def route_data_with_hierarchy(final_route_data, method)
-      result = final_route_data[:entry][:prepared][method] || {
-        endpoint: final_route_data[:endpoint],
-        endpoints: endpoint_hierarchy(final_route_data[:path], method, final_route_data[:endpoint])
+    # A path with a GET route but no HEAD or all route still answers HEAD
+    # requests by running the GET handler; the Router strips the body from the
+    # response (marked here with head_from_get).
+    def prepare_head_fallback(entry)
+      return if entry[:prepared]["HEAD"]
+
+      get_endpoint = entry[:methods]["GET"]
+      return unless get_endpoint
+
+      entry[:prepared]["HEAD"] = {
+        endpoint: get_endpoint,
+        endpoints: endpoint_hierarchy(entry[:path], "GET", get_endpoint),
+        head_from_get: true
       }
+    end
 
-      return result unless final_route_data[:params]
+    def matching_entries(path)
+      entries = []
+      exact = @entries_by_path[path]
+      entries << exact if exact
 
-      result.merge(params: final_route_data[:params])
+      @dynamic_entries.each do |entry|
+        entries << entry if !entry.equal?(exact) && entry[:mustermann].match(path)
+      end
+
+      entries
+    end
+
+    def entry_methods(entry)
+      return SUPPORTED_METHODS.dup if entry[:all]
+
+      methods = entry[:methods].keys
+      methods += ["HEAD"] if methods.include?("GET")
+      methods
     end
 
     def endpoint_hierarchy(path_pattern, method, final_endpoint)
@@ -212,7 +251,9 @@ module Raxon
     # @param path [String] Request path
     # @return [Hash, nil] Route data with extracted params if found, nil otherwise
     def find_pattern_match(method, path)
-      find_pattern_candidate(method, path) || find_all_pattern_candidate(method, path)
+      find_pattern_candidate(method, path) ||
+        find_all_pattern_candidate(method, path) ||
+        find_head_fallback_candidate(method, path)
     end
 
     def find_pattern_candidate(method, path)
@@ -231,6 +272,21 @@ module Raxon
       @dynamic_entries.each do |entry|
         endpoint = entry[:all]
         next unless endpoint
+
+        match = entry[:mustermann].match(path)
+        return dynamic_route_data(entry, method, match) if match
+      end
+
+      nil
+    end
+
+    # HEAD requests with no explicit HEAD or all route fall back to the GET
+    # route; the prepared HEAD entry carries the head_from_get marker.
+    def find_head_fallback_candidate(method, path)
+      return nil unless method == "HEAD"
+
+      @dynamic_entries.each do |entry|
+        next unless entry[:methods]["GET"]
 
         match = entry[:mustermann].match(path)
         return dynamic_route_data(entry, method, match) if match

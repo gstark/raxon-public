@@ -191,7 +191,7 @@ module Raxon
         gem "raxon"
 
         group :development, :test do
-          gem "puma", "~> 6.0"
+          gem "puma", "~> 7.0"
           gem "rake"
           gem "rspec", "~> 3.0"
         end
@@ -237,7 +237,6 @@ module Raxon
         *~
         .ruby-version
         .ruby-gemset
-        Gemfile.lock
         doc/apidoc/
       GITIGNORE
 

@@ -495,3 +495,32 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
     end
   end
 end
+
+RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator, "array-root validation results" do
+  def validator_for(response)
+    described_class.new(response).to_dry_schema
+  end
+
+  let(:response) do
+    Raxon::OpenApi::Response.new(type: :array, of: :object).tap do |r|
+      r.property :id, type: :integer
+    end
+  end
+
+  it "returns the coerced array on success" do
+    result = validator_for(response).call([{id: "1"}, {id: "2"}])
+
+    expect(result.success?).to be(true)
+    expect(result.to_h).to eq([{id: 1}, {id: 2}])
+  end
+
+  it "returns the original value and indexed errors on failure" do
+    original = [{id: 1}, {id: "not-a-number"}]
+
+    result = validator_for(response).call(original)
+
+    expect(result.success?).to be(false)
+    expect(result.to_h).to eq(original)
+    expect(result.errors.to_h.keys).to include(1)
+  end
+end

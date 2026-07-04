@@ -276,3 +276,92 @@ RSpec.describe "Raxon.route" do
     expect { Raxon.route }.to raise_error(ArgumentError, "Raxon.route requires a block")
   end
 end
+
+RSpec.describe Raxon::RouteDSL do
+  let(:endpoint) { Raxon::OpenApi::Endpoint.new }
+  let(:dsl) { described_class.new(endpoint) }
+
+  it "returns the endpoint request body when called without options" do
+    expect(dsl.request_body).to be_nil
+
+    dsl.request_body(type: :object) do
+      property :name, type: :string
+    end
+
+    expect(dsl.request_body).to be(endpoint.request_body)
+    expect(dsl.request_body.properties).to include(:name)
+  end
+
+  it "returns the request body through the body alias when called without options" do
+    dsl.body(type: :object) do
+      property :name, type: :string
+    end
+
+    expect(dsl.body).to be(endpoint.request_body)
+  end
+
+  it "returns the endpoint parameters when called without a block" do
+    dsl.parameters do
+      define :id, type: :string, in: :path
+    end
+
+    expect(dsl.parameters).to be(endpoint.parameters)
+    expect(dsl.parameters.parameters.map(&:name)).to eq([:id])
+  end
+
+  it "passes one-arity blocks through to the endpoint unchanged" do
+    dsl.response(200, type: :object) do |response|
+      response.property :success, type: :boolean
+    end
+
+    expect(endpoint.responses[200].properties).to include(:success)
+  end
+
+  it "reports and delegates the endpoint API" do
+    expect(dsl).to respond_to(:description)
+
+    dsl.description "Health check"
+
+    expect(endpoint.description).to eq("Health check")
+  end
+
+  it "raises NoMethodError for methods the endpoint does not support" do
+    expect(dsl).not_to respond_to(:not_a_dsl_method)
+    expect { dsl.not_a_dsl_method }.to raise_error(NoMethodError)
+  end
+
+  it "delegates and reports methods on nested DSL targets" do
+    reached = nil
+
+    dsl.response(200, type: :object) do
+      property :inner, type: :object do
+        reached = respond_to?(:property) && !respond_to?(:not_a_dsl_method)
+      end
+    end
+
+    expect(reached).to be(true)
+  end
+
+  it "raises NameError for unknown methods inside nested blocks" do
+    expect do
+      dsl.response(200, type: :object) do
+        not_a_dsl_method
+      end
+    end.to raise_error(NameError, /not_a_dsl_method/)
+  end
+end
+
+RSpec.describe Raxon::RouteDSL, "nested block arity" do
+  it "passes one-arity property blocks through inside zero-arity blocks" do
+    endpoint = Raxon::OpenApi::Endpoint.new
+    dsl = described_class.new(endpoint)
+
+    dsl.response(200, type: :object) do
+      property :profile, type: :object do |profile|
+        profile.property :bio, type: :string
+      end
+    end
+
+    expect(endpoint.responses[200].properties[:profile].properties).to include(:bio)
+  end
+end

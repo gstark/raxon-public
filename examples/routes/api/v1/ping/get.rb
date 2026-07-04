@@ -8,10 +8,6 @@ Raxon.route do
 
   response 200, type: :object, as: "Ping"
 
-  before do |_request, response|
-    response.header "X-API-Key", "secret"
-  end
-
   handler do |_request, response|
     response.ok(id: "ping", message: "pong")
   end

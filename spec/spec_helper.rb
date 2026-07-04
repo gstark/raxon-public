@@ -36,6 +36,10 @@ RSpec.configure do |config|
     Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
     Raxon.configure do |config|
       config.routes_directory = "routes"
+      # The suite runs in the development environment, where hot reloading
+      # defaults on; keep it off so routers don't watch the filesystem.
+      # Reloader specs enable it explicitly.
+      config.reload_routes = false
     end
     Raxon::RouteLoader.reset!
     Raxon::OpenApi::DSL.reset!

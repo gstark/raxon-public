@@ -34,6 +34,12 @@ module Raxon
       super
       # Load handler helpers when router is initialized
       Raxon.load_helpers
+      # Load routes from the configured directories so `run Raxon::Server.new`
+      # works without an explicit boot-time RouteLoader.load!. Already-loaded
+      # files are tracked and skipped, so apps (and tests) that load or define
+      # routes beforehand are unaffected.
+      Raxon::RouteLoader.load!
+      @route_reloader = Raxon::RouteReloader.new if Raxon.configuration.reload_routes?
     end
 
     # Rack application entry point.
@@ -41,7 +47,11 @@ module Raxon
     # @param env [Hash] Rack environment hash
     # @return [Array] Rack response tuple [status, headers, body]
     def call(env)
+      @route_reloader&.reload_if_changed
+
       rack_request = Rack::Request.new(env)
+
+      return payload_too_large_response if request_body_too_large?(rack_request)
 
       route_data = Raxon::RouteLoader.routes.find(rack_request.request_method, rack_request.path)
 
@@ -58,10 +68,21 @@ module Raxon
           result = fallback.call(env)
           debug_log { "[Raxon] Fallback returned: status=#{result[0]}, headers=#{result[1].inspect}, body_class=#{result[2].class}" }
           return result
-        else
-          debug_log { "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, no fallback configured, returning 404" }
-          return not_found_response
         end
+
+        allowed = Raxon::RouteLoader.routes.allowed_methods(rack_request.path)
+        if allowed.any?
+          if rack_request.request_method == "OPTIONS"
+            debug_log { "[Raxon] Automatic OPTIONS response for #{rack_request.path}: #{allowed.join(", ")}" }
+            return auto_options_response(allowed)
+          end
+
+          debug_log { "[Raxon] Method not allowed: #{rack_request.request_method} #{rack_request.path}, allowed: #{allowed.join(", ")}" }
+          return method_not_allowed_response(allowed)
+        end
+
+        debug_log { "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, no fallback configured, returning 404" }
+        return not_found_response(rack_request)
       end
 
       debug_log { "[Raxon] Route matched: #{rack_request.request_method} #{rack_request.path} -> #{route_data[:endpoint].route_file_path}" }
@@ -76,6 +97,7 @@ module Raxon
 
       wrapper_request = Raxon::Request.new(rack_request, endpoint)
       wrapper_response = Raxon::Response.new(endpoint)
+      wrapper_response.request = wrapper_request
 
       # Store request and response in env for error handler access
       env["raxon.request"] = wrapper_request
@@ -90,6 +112,7 @@ module Raxon
       end
 
       rack_response = wrapper_response.to_rack
+      rack_response = strip_head_body(rack_response) if route_data[:head_from_get]
       debug_log { "[Raxon] Returning: status=#{rack_response[0]}, headers=#{rack_response[1].inspect}" }
       rack_response
     end
@@ -179,6 +202,7 @@ module Raxon
 
       wrapper_request = Raxon::Request.new(rack_request, endpoint)
       wrapper_response = Raxon::Response.new(endpoint)
+      wrapper_response.request = wrapper_request
 
       env["raxon.request"] = wrapper_request
       env["raxon.response"] = wrapper_response
@@ -194,11 +218,80 @@ module Raxon
       rack_response
     end
 
-    def not_found_response
+    # HEAD requests served by the GET route (see Routes#prepare_head_fallback)
+    # must not send a body; headers (including content-type) stand as computed.
+    def strip_head_body(rack_response)
+      body = rack_response[2]
+      body.close if body.respond_to?(:close)
+
+      [rack_response[0], rack_response[1], []]
+    end
+
+    def auto_options_response(allowed)
+      [
+        204,
+        {"allow" => allowed.join(", ")},
+        []
+      ]
+    end
+
+    def method_not_allowed_response(allowed)
+      [
+        405,
+        {"content-type" => "application/json", "allow" => allowed.join(", ")},
+        [%({"error":"Method Not Allowed"})]
+      ]
+    end
+
+    def not_found_response(rack_request)
+      handler = Raxon.configuration.not_found_handler
+      return default_not_found_response unless handler
+
+      request = Raxon::Request.new(rack_request)
+      response = Raxon::Response.new
+      response.request = request
+      response.code = :not_found
+      response.body = {error: "Not Found"}
+
+      begin
+        handler.call(request, response)
+      rescue Raxon::HaltException => e
+        response = e.response
+      end
+
+      response.to_rack
+    end
+
+    def default_not_found_response
       [
         404,
         {"content-type" => "application/json"},
         [%({"error":"Not Found"})]
+      ]
+    end
+
+    # Whether the declared request body exceeds the configured maximum.
+    #
+    # This is an early, cheap guard on the Content-Length header so oversized
+    # bodies are rejected before Raxon reads them into memory. It is a first line
+    # of defense, not a complete one (a client can lie about Content-Length or
+    # stream a chunked body); pair it with a body-limiting proxy/middleware for
+    # untrusted traffic.
+    def request_body_too_large?(rack_request)
+      max = Raxon.configuration.max_request_body_size
+      return false unless max
+
+      content_length = rack_request.get_header("CONTENT_LENGTH")
+      return false if content_length.nil? || content_length.empty?
+
+      content_length.to_i > max
+    end
+
+    def payload_too_large_response
+      [
+        413,
+        {"content-type" => "application/json"},
+        [%({"error":"Payload Too Large"})]
       ]
     end
 

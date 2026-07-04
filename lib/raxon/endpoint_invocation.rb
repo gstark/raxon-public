@@ -41,12 +41,51 @@ module Raxon
     # @return [void]
     def run(request, response, metadata)
       run_metadata_blocks(request, response, metadata)
+      return unless authenticate(request, response, metadata)
+
       run_before_blocks(request, response, metadata)
       run_handler(request, response, metadata)
       run_after_blocks(request, response, metadata)
     end
 
     private
+
+    # Enforce the endpoint's declared security requirements.
+    #
+    # OpenAPI semantics: the requirements array is an OR (any one grants
+    # access) and the schemes within a requirement are an AND (all must pass).
+    # A requirement is enforceable only when every scheme it references has an
+    # authenticator block; requirements referencing documentation-only schemes
+    # are skipped, and when no requirement is enforceable the declaration is
+    # documentation-only and nothing runs (backwards compatible).
+    #
+    # Authenticator blocks receive (request, metadata, scopes) and grant access
+    # by returning truthy. When no enforceable requirement passes, the response
+    # becomes a 401 and the rest of the lifecycle (before blocks, handler,
+    # after blocks) is skipped.
+    #
+    # @return [Boolean] true when the request may proceed
+    def authenticate(request, response, metadata)
+      requirements = Array(@handler_endpoint.security)
+      return true if requirements.empty?
+
+      schemes = Raxon::OpenApi::DSL.security_schemes
+      enforceable = requirements.select do |requirement|
+        requirement.keys.all? { |name| schemes[name.to_sym]&.authenticator }
+      end
+      return true if enforceable.empty?
+
+      granted = enforceable.any? do |requirement|
+        requirement.all? do |name, scopes|
+          schemes[name.to_sym].authenticator.call(request, metadata, scopes)
+        end
+      end
+      return true if granted
+
+      response.code = :unauthorized
+      response.body = {error: "Unauthorized"}
+      false
+    end
 
     # Metadata blocks run parent to child, each in its endpoint's context.
     def run_metadata_blocks(request, response, metadata)
@@ -90,8 +129,8 @@ module Raxon
     #
     # Accessing request.params triggers parameter validation. A JSON parse error
     # or validation failure short-circuits to 400 without running the handler. A
-    # halt set by an earlier stage skips the handler but still validates the
-    # response.
+    # halt from an earlier stage never reaches here: HaltException unwinds past
+    # the handler to the Router.
     def run_handler(request, response, metadata)
       return unless @handler_endpoint.has_handler?
 
@@ -100,10 +139,8 @@ module Raxon
       return bad_request(response, "Invalid JSON in request body") if request.json_parse_error
       return bad_request(response, "Validation failed", request.validation_errors) if request.validation_errors
 
-      unless response.halted?
-        context = request.endpoint_context(@handler_endpoint)
-        execute_block_in_context(context, @handler_endpoint.handler_block, request, response, metadata)
-      end
+      context = request.endpoint_context(@handler_endpoint)
+      execute_block_in_context(context, @handler_endpoint.handler_block, request, response, metadata)
 
       validate_response_body(response)
     end

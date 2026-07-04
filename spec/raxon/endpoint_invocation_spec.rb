@@ -100,6 +100,39 @@ RSpec.describe Raxon::EndpointInvocation do
       expect(response.status_code).to eq(200)
       expect(response.body).to eq(id: 7)
     end
+
+    # Regression: response_schemas was keyed by the declared status (a symbol for
+    # exception_error / response :unprocessable_entity), but the lookup used the
+    # integer Response#status_code, so symbol-declared responses were never
+    # validated. Keys are now normalized to integers.
+    it "validates a response declared with a symbol status" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.exception_error # :unprocessable_entity (422), body shape {errors: [string]}
+      endpoint.handler do |_req, res, _meta|
+        res.code = :unprocessable_entity
+        res.body = {error: "wrong shape"} # missing required :errors array
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+      expect(response.body[:status_code]).to eq(422)
+    end
+
+    it "leaves a conforming symbol-status response untouched" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.exception_error
+      endpoint.handler do |_req, res, _meta|
+        res.code = :unprocessable_entity
+        res.body = {errors: ["bad input"]}
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(422)
+      expect(response.body).to eq(errors: ["bad input"])
+    end
   end
 
   describe "lifecycle ordering across a hierarchy" do

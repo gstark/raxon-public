@@ -95,3 +95,68 @@ RSpec.describe Raxon::OpenApi::RequestBodyCoercer do
     end
   end
 end
+
+RSpec.describe Raxon::OpenApi::RequestBodyCoercer, "pass-through behavior" do
+  it "returns params untouched when there is no request body definition" do
+    params = {name: "Jane"}
+
+    expect(described_class.new(nil).call(params)).to equal(params)
+  end
+
+  it "returns params untouched when the request body declares no properties" do
+    request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+    params = {name: "Jane"}
+
+    expect(described_class.new(request_body).call(params)).to equal(params)
+  end
+
+  it "returns non-hash params untouched" do
+    request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+    request_body.property :photo, type: :file, required: true
+
+    expect(described_class.new(request_body).call(nil)).to be_nil
+    expect(described_class.new(request_body).call("raw")).to eq("raw")
+  end
+
+  it "leaves non-hash values for object properties untouched" do
+    request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+    request_body.property :profile, type: :object do |profile|
+      profile.property :photo, type: :file, required: true
+    end
+    params = {profile: "not-a-hash"}
+
+    expect(described_class.new(request_body).call(params)[:profile]).to eq("not-a-hash")
+  end
+
+  it "leaves non-array values for array properties untouched" do
+    request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+    request_body.property :attachments, type: :array, of: :object do |attachment|
+      attachment.property :file, type: :file, required: true
+    end
+    params = {attachments: "not-an-array"}
+
+    expect(described_class.new(request_body).call(params)[:attachments]).to eq("not-an-array")
+  end
+
+  it "skips non-hash items inside arrays of objects" do
+    request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+    request_body.property :attachments, type: :array, of: :object do |attachment|
+      attachment.property :file, type: :file, required: true
+    end
+    params = {attachments: ["oops", 42]}
+
+    expect(described_class.new(request_body).call(params)[:attachments]).to eq(["oops", 42])
+  end
+end
+
+RSpec.describe Raxon::OpenApi::RequestBodyCoercer, "object properties without nested declarations" do
+  it "passes hash values through untouched" do
+    request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+    request_body.property :metadata, type: :object
+    request_body.property :photo, type: :file, required: true
+
+    params = {metadata: {"free" => "form"}}
+
+    expect(described_class.new(request_body).call(params)[:metadata]).to eq({"free" => "form"})
+  end
+end

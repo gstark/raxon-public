@@ -59,3 +59,13 @@ RSpec.describe Raxon::Instrumentation::ActiveRecordRuntime do
     end
   end
 end
+
+RSpec.describe Raxon::Instrumentation::ActiveRecordRuntime, "subscription failure" do
+  it "cleans up safely when the notification subscription fails" do
+    tracker = described_class.new
+    allow(ActiveSupport::Notifications).to receive(:subscribe).and_raise("subscription broken")
+
+    expect { tracker.track { :never_reached } }.to raise_error("subscription broken")
+    expect(tracker.runtime).to eq(0)
+  end
+end

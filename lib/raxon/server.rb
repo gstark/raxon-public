@@ -79,10 +79,13 @@ module Raxon
     #   server.use Rack::Session::Cookie, secret: "my_secret"
     #   server.use Raxon::ErrorHandler, logger: Logger.new($stdout)
     def use(new_middleware, *args, **kwargs, &block)
-      # Auto-inject configured on_error callback for ErrorHandler
-      if new_middleware == Raxon::ErrorHandler && !kwargs.key?(:on_error)
-        if Raxon.configuration.on_error
+      if new_middleware == Raxon::ErrorHandler
+        # Auto-inject the configured on_error callback and logger
+        if !kwargs.key?(:on_error) && Raxon.configuration.on_error
           kwargs = kwargs.merge(on_error: Raxon.configuration.on_error)
+        end
+        if !kwargs.key?(:logger) && Raxon.configuration.logger
+          kwargs = kwargs.merge(logger: Raxon.configuration.logger)
         end
       end
 
@@ -117,6 +120,11 @@ module Raxon
         else
           middleware.new(new_app, *args, **kwargs, &block)
         end
+      end
+
+      # Request logging wraps the whole stack when a logger is configured
+      if (logger = Raxon.configuration.logger)
+        new_app = Rack::CommonLogger.new(new_app, logger)
       end
 
       new_app

@@ -230,6 +230,13 @@ RSpec.describe Raxon::OpenApi::Endpoint do
 
       expect(endpoint.response_schemas).to include(200)
     end
+
+    it "keys schemas by integer status code even when declared with a symbol" do
+      endpoint = described_class.new
+      endpoint.exception_error # declares :unprocessable_entity
+
+      expect(endpoint.response_schemas.keys).to eq([422])
+    end
   end
 
   describe "#exception_error" do
@@ -647,5 +654,27 @@ RSpec.describe Raxon::OpenApi::Endpoint do
 
       expect(status).to eq(200)
     end
+  end
+end
+
+RSpec.describe Raxon::OpenApi::Endpoint, "#security" do
+  let(:endpoint) { described_class.new }
+
+  it "wraps a hash requirement in an array" do
+    endpoint.security({oauth: ["read:users"]})
+
+    expect(endpoint.security).to eq([{oauth: ["read:users"]}])
+  end
+
+  it "keeps an array requirement as-is" do
+    endpoint.security([{api_key: []}, {oauth: ["admin"]}])
+
+    expect(endpoint.security).to eq([{api_key: []}, {oauth: ["admin"]}])
+  end
+
+  it "expands a scheme name with scopes" do
+    endpoint.security(:api_key, scopes: ["read"])
+
+    expect(endpoint.security).to eq([{api_key: ["read"]}])
   end
 end

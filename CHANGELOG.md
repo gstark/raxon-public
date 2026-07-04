@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files now use the `Raxon.route` shorthand, which infers the path from the
   route file location.
 
+### Fixed
+
+- Response body validation now runs for responses declared with a symbol status
+  - `Endpoint#response_schemas` keyed schemas by the declared status (a symbol for
+    `exception_error` / `response :unprocessable_entity`), but the lookup used the
+    integer `Response#status_code`, so the schema was never found and validation
+    was silently skipped for every symbol-declared response
+  - Keys are now normalized to integer status codes via `DSL.status_to_code`
+
 ### Security
 
 - Prevent information disclosure in error responses

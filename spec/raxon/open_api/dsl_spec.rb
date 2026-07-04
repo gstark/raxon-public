@@ -143,7 +143,7 @@ RSpec.describe Raxon::OpenApi::DSL do
       spec = described_class.to_open_api
 
       expect(spec).to include(
-        "openapi" => "3.0.0",
+        "openapi" => "3.1.0",
         "info" => {
           "title" => "API",
           "description" => "",
@@ -715,6 +715,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "puts nullable on array schemas instead of array items" do
+      Raxon.configuration.openapi_spec_version = "3.0"
       described_class.endpoint do |endpoint|
         endpoint.operation(:get)
         endpoint.path("/api/v1/tags")
@@ -730,6 +731,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "puts nullable on component-backed array schemas" do
+      Raxon.configuration.openapi_spec_version = "3.0"
       described_class.component("User", type: :object) do |component|
         component.property(:id, type: :number)
       end
@@ -749,6 +751,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "puts nullable on inline array response schemas instead of inline item schemas" do
+      Raxon.configuration.openapi_spec_version = "3.0"
       described_class.endpoint do |endpoint|
         endpoint.operation(:get)
         endpoint.path("/api/v1/nullable-users")
@@ -1215,5 +1218,45 @@ RSpec.describe Raxon::OpenApi::DSL do
       json_body = JSON.parse(body.first)
       expect(json_body["error"]).to eq("Response validation failed")
     end
+  end
+end
+
+RSpec.describe Raxon::OpenApi::Specification, "schema rendering" do
+  it "renders union type properties as anyOf" do
+    Raxon.configuration.openapi_spec_version = "3.0"
+    spec = described_class.new
+    spec.component("Metric", type: :object) do |component|
+      component.property :value, type: [:string, :number], description: "Reading", nullable: true
+    end
+    spec.endpoint do |endpoint|
+      endpoint.path "/metrics"
+      endpoint.operation :get
+      endpoint.response 200, type: :object, as: "Metric"
+    end
+
+    schema = spec.to_open_api.dig("components", "schemas", "Metric", "properties", "value")
+
+    expect(schema["anyOf"]).to eq([{"type" => "string"}, {"type" => "number"}])
+    expect(schema["description"]).to eq("Reading")
+    expect(schema["nullable"]).to be(true)
+  end
+
+  it "renders inline object properties for arrays declared with of: :object" do
+    spec = described_class.new
+    spec.component("Report", type: :object) do |component|
+      component.property :rows, type: :array, of: :object do |row|
+        row.property :label, type: :string
+      end
+    end
+    spec.endpoint do |endpoint|
+      endpoint.path "/reports"
+      endpoint.operation :get
+      endpoint.response 200, type: :object, as: "Report"
+    end
+
+    items = spec.to_open_api.dig("components", "schemas", "Report", "properties", "rows", "items")
+
+    expect(items["type"]).to eq("object")
+    expect(items.dig("properties", "label", "type")).to eq("string")
   end
 end

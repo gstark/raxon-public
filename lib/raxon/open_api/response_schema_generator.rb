@@ -49,10 +49,6 @@ module Raxon
       # Object-root responses return Dry::Schema::Result directly. Arrays need an
       # adapter result that exposes the same methods used by Endpoint.
       class ValidationResult
-        def self.failure(value, errors)
-          new(value, errors, value)
-        end
-
         def initialize(value, errors, coerced_value)
           @value = value
           @errors = errors

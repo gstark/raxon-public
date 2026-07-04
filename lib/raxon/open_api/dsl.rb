@@ -32,16 +32,31 @@ module Raxon
     #   OpenApi::DSL.from_resource(:User, UserResource, User)
     #
     class Specification
-      attr_reader :endpoints, :components
+      attr_reader :endpoints, :components, :security_schemes
 
       def initialize
         @endpoints = []
         @components = []
+        @security_schemes = {}
       end
 
       def reset!
         @endpoints.clear
         @components.clear
+        @security_schemes.clear
+      end
+
+      # Define a reusable security scheme, emitted under components.securitySchemes
+      # and referenced from endpoints via endpoint.security. An optional block
+      # makes the scheme enforceable at runtime (see SecurityScheme).
+      #
+      # @param name [Symbol, String] Registry name for endpoint.security references
+      # @param options [Hash] Scheme fields (type:, name:, in:, scheme:, ...)
+      # @return [SecurityScheme]
+      def security_scheme(name, **options, &authenticator)
+        scheme = SecurityScheme.new(name, **options, &authenticator)
+        @security_schemes[scheme.name] = scheme
+        scheme
       end
 
       def component(name, options, &block)
@@ -63,10 +78,10 @@ module Raxon
           yield component if block_given?
 
           resource._attributes.each do |attribute_name, definition|
-            next if component&.properties&.key?(attribute_name.to_sym)
+            next if component.properties.key?(attribute_name.to_sym)
 
             if definition.is_a?(Alba::Association)
-              DSL.build_association_property(component, attribute_name, definition, nil)
+              DSL.build_association_property(component, attribute_name, definition)
             elsif definition.is_a?(Symbol)
               DSL.build_database_property(component, attribute_name, active_record_class)
             end
@@ -77,12 +92,13 @@ module Raxon
       def to_open_api
         DSL.with_components(@components) do
           data = {
-            openapi: "3.0.0",
+            openapi: DSL.openapi_version_string,
             info: DSL.build_api_info,
             paths: DSL.build_paths(@endpoints),
-            components: DSL.build_components(@components)
+            components: DSL.build_components(@components, @security_schemes)
           }
 
+          data = DSL.convert_nullable_to_type_arrays(data) if DSL.openapi_31?
           DSL.deep_transform_keys(data, &:to_s)
         end
       end
@@ -107,6 +123,75 @@ module Raxon
 
       def self.components
         default_spec.components
+      end
+
+      def self.security_schemes
+        default_spec.security_schemes
+      end
+
+      # Define a security scheme on the default specification.
+      #
+      # @see Specification#security_scheme
+      def self.security_scheme(name, **options, &authenticator)
+        default_spec.security_scheme(name, **options, &authenticator)
+      end
+
+      # The `openapi` field value for the configured spec version.
+      #
+      # @return [String] "3.1.0" or "3.0.0"
+      def self.openapi_version_string
+        case Raxon.configuration.openapi_spec_version.to_s
+        when "3.1", "3.1.0"
+          "3.1.0"
+        when "3.0", "3.0.0"
+          "3.0.0"
+        else
+          raise ArgumentError, "Unsupported openapi_spec_version: #{Raxon.configuration.openapi_spec_version.inspect} (expected \"3.1\" or \"3.0\")"
+        end
+      end
+
+      def self.openapi_31?
+        openapi_version_string == "3.1.0"
+      end
+
+      # Rewrite 3.0-style +nullable: true+ schemas into their OpenAPI 3.1 form,
+      # where null is expressed through the type system instead of a keyword:
+      # a typed schema gains "null" in its type array, an anyOf gains a
+      # +{type: "null"}+ branch, and a bare $ref is wrapped in an anyOf (a $ref
+      # cannot carry sibling type information).
+      #
+      # @param node [Object] Emitted specification data (pre key-stringification)
+      # @return [Object] The transformed data
+      def self.convert_nullable_to_type_arrays(node)
+        case node
+        when Hash
+          transformed = node.to_h { |key, value| [key, convert_nullable_to_type_arrays(value)] }
+          convert_nullable_schema(transformed)
+        when Array
+          node.map { |value| convert_nullable_to_type_arrays(value) }
+        else
+          node
+        end
+      end
+
+      def self.convert_nullable_schema(schema)
+        return schema unless schema[:nullable] == true
+
+        if schema.key?(:type)
+          schema.delete(:nullable)
+          schema[:type] = Array(schema[:type]) + ["null"]
+          schema
+        elsif schema.key?(:anyOf)
+          schema.delete(:nullable)
+          schema[:anyOf] += [{type: "null"}]
+          schema
+        elsif (ref = schema[:$ref] || schema["$ref"])
+          {anyOf: [{"$ref" => ref}, {type: "null"}]}
+        else
+          # Not a schema this transform understands (e.g. literal example data);
+          # leave it untouched.
+          schema
+        end
       end
 
       # Process and normalize a type specification.
@@ -182,13 +267,12 @@ module Raxon
       # @param component [Component] The component to add the property to
       # @param attribute_name [Symbol, String] The attribute name
       # @param definition [Alba::Association] The association definition
-      # @param property [Property, nil] The existing property if already defined
       # @return [void]
       #
       # @private
-      def self.build_association_property(component, attribute_name, definition, property)
+      def self.build_association_property(component, attribute_name, definition)
         resource_name = definition.instance_variable_get(:@resource).name.split("::").last.gsub(/Resource$/, "")
-        component.property attribute_name, type: :array, of: resource_name, nullable: property&.nullable
+        component.property attribute_name, type: :array, of: resource_name
       end
 
       # Build a property from a database column.
@@ -496,11 +580,11 @@ module Raxon
       #
       # @private
       def self.array_items_definition(property)
-        return {type: "object", **properties_to_json(property.properties)} if property.properties&.any? && !property.of
+        return {type: "object", **properties_to_json(property.properties)} if property.properties.any? && !property.of
 
         items = property_to_items_type(property)
         items.merge!(properties_to_json(property.properties)) if property.of.to_s == "object" && property.properties
-        items.merge!(merge_enum(property)) unless items.key?(:"$ref")
+        items.merge!(merge_enum(property)) unless items.key?(:$ref)
         items
       end
 
@@ -547,7 +631,7 @@ module Raxon
           description: property.description,
           **merge_enum_and_nullable(property),
           **schema_metadata(property),
-          **(property.properties ? properties_to_json(property.properties) : {})
+          **properties_to_json(property.properties)
         }
       end
 
@@ -827,7 +911,7 @@ module Raxon
           headers: {},
           content: {
             response.content_type => {
-              schema: property_to_json("XXXXX", response)[1].except(:description)
+              schema: property_to_json("schema", response)[1].except(:description)
             }
           }
         }
@@ -866,11 +950,13 @@ module Raxon
       # @return [Hash] Components hash with schemas
       #
       # @private
-      def self.build_components(components = default_spec.components)
+      def self.build_components(components = default_spec.components, security_schemes = default_spec.security_schemes)
         with_components(components) do
-          {
+          result = {
             schemas: components.to_h { |component| property_to_json(component.name, component) }
           }
+          result[:securitySchemes] = security_schemes.transform_values(&:to_openapi) if security_schemes.any?
+          result
         end
       end
 

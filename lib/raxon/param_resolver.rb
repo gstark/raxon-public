@@ -105,6 +105,9 @@ module Raxon
       params
     end
 
+    # Only called for non-query parameters: assemble_validation skips
+    # `in: :query`, which is already covered by the lenient merge.
+    #
     # @param parameter [Raxon::OpenApi::Parameter]
     # @param raw [Hash]
     # @return [Object, nil]
@@ -112,8 +115,6 @@ module Raxon
       case parameter.in.to_sym
       when :path
         @sources.path[parameter.name.to_sym]
-      when :query
-        @sources.query[parameter.name.to_sym]
       when :header
         header_value(parameter.name)
       when :cookie

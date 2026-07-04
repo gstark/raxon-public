@@ -75,9 +75,7 @@ module Raxon
     # Backing hash for the legacy metadata handler argument.
     #
     # @return [Hash]
-    def metadata
-      @metadata
-    end
+    attr_reader :metadata
 
     # Get path parameters extracted by the router from dynamic route segments.
     #
@@ -436,14 +434,23 @@ module Raxon
 
     # Get the remote IP address.
     #
-    # Attempts to determine the true client IP by checking proxy headers
-    # in the following order:
+    # SECURITY: X-Forwarded-For and X-Real-IP are set by clients and are trivially
+    # forgeable. They are honored ONLY when +config.trust_proxy_headers+ is enabled,
+    # which you should do only when Raxon runs behind a reverse proxy you control
+    # that *overwrites* these headers. Otherwise (the default) this returns the raw
+    # connection peer (REMOTE_ADDR), which cannot be spoofed by a request header.
+    # Note that Rack's own #ip also parses X-Forwarded-For, so it is NOT a safe
+    # substitute here.
+    #
+    # When proxy headers are trusted, the order is:
     # 1. X-Forwarded-For (takes the first/leftmost IP if multiple)
     # 2. X-Real-IP
     # 3. Falls back to the standard IP from Rack
     #
     # @return [String] The remote IP address
     def remote_ip
+      return @rack_request.get_header("REMOTE_ADDR") || ip unless Raxon.configuration.trust_proxy_headers
+
       # Check X-Forwarded-For header (may contain multiple IPs)
       forwarded_for = header("HTTP_X_FORWARDED_FOR")
       if forwarded_for && !forwarded_for.empty?
@@ -565,9 +572,8 @@ module Raxon
     #
     # @private
     def extract_domain(host, tld_length)
-      return nil if host.include?(":")  # IP address with port
+      return nil if host.include?(":")  # IP address with port, or IPv6
       return nil if host.match?(/\A\d+\.\d+\.\d+\.\d+\z/)  # IPv4 address
-      return nil if host.match?(/\A\[.*\]\z/)  # IPv6 address
 
       parts = host.split(".")
       return nil if parts.length <= tld_length
@@ -583,9 +589,8 @@ module Raxon
     #
     # @private
     def extract_subdomains(host, tld_length)
-      return [] if host.include?(":")  # IP address with port
+      return [] if host.include?(":")  # IP address with port, or IPv6
       return [] if host.match?(/\A\d+\.\d+\.\d+\.\d+\z/)  # IPv4 address
-      return [] if host.match?(/\A\[.*\]\z/)  # IPv6 address
 
       parts = host.split(".")
       return [] if parts.length <= (1 + tld_length)
