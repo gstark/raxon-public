@@ -7,6 +7,7 @@ require_relative "parameters"
 require_relative "property"
 require_relative "request_body"
 require_relative "response"
+require_relative "schema_introspection"
 
 module Raxon
   module OpenApi
@@ -14,7 +15,8 @@ module Raxon
     #
     # This class provides a domain-specific language for defining OpenAPI components,
     # endpoints, and specifications. It supports automatic schema generation from
-    # ActiveRecord models and Alba resources.
+    # Alba resources and database schemas (via SchemaIntrospection, which detects
+    # whichever persistence library the host application uses).
     #
     # @example Basic usage
     #   OpenApi::DSL.component(:User, type: :object) do |component|
@@ -73,20 +75,14 @@ module Raxon
         endpoint
       end
 
-      def from_resource(name, resource, active_record_class, &block)
-        component(name, type: :object) do |component|
-          yield component if block_given?
+      def from_resource(name, resource, model, &block)
+        columns = SchemaIntrospection.model_columns(model)
+        build_from_attributes(name, resource, columns, enum_source: model, &block)
+      end
 
-          resource._attributes.each do |attribute_name, definition|
-            next if component.properties.key?(attribute_name.to_sym)
-
-            if definition.is_a?(Alba::Association)
-              DSL.build_association_property(component, attribute_name, definition)
-            elsif definition.is_a?(Symbol)
-              DSL.build_database_property(component, attribute_name, active_record_class)
-            end
-          end
-        end
+      def from_table(name, resource, table_name, &block)
+        columns = SchemaIntrospection.table_columns(table_name)
+        build_from_attributes(name, resource, columns, &block)
       end
 
       def to_open_api
@@ -100,6 +96,31 @@ module Raxon
 
           data = DSL.convert_nullable_to_type_arrays(data) if DSL.openapi_31?
           DSL.deep_transform_keys(data, &:to_s)
+        end
+      end
+
+      private
+
+      # Shared body of from_resource/from_table: block-declared properties
+      # first, then Alba attributes resolved against the introspected columns
+      # (nil when no database/adapter is available).
+      def build_from_attributes(name, resource, columns, enum_source: nil)
+        component(name, type: :object) do |component|
+          yield component if block_given?
+
+          resource._attributes.each do |attribute_name, definition|
+            next if component.properties.key?(attribute_name.to_sym)
+
+            if definition.is_a?(Alba::Association)
+              DSL.build_association_property(component, attribute_name, definition)
+            elsif definition.is_a?(Symbol) && columns
+              column = columns[attribute_name.to_s]
+              next if column.nil?
+
+              allowable_values = enum_source ? SchemaIntrospection.enum_values(enum_source, attribute_name) : nil
+              DSL.build_column_property(component, attribute_name, column, allowable_values: allowable_values)
+            end
+          end
         end
       end
     end
@@ -228,29 +249,18 @@ module Raxon
         end
       end
 
-      # Check if database is present and accessible for the given ActiveRecord class.
-      #
-      # @param active_record_class [Class] ActiveRecord model class
-      # @return [Boolean] true if database is accessible, false otherwise
-      #
-      # @example
-      #   database_present?(User)  # => true if User table exists and is accessible
-      #
-      def self.database_present?(active_record_class)
-        !!active_record_class.columns_hash
-      rescue ActiveRecord::StatementInvalid
-        false
-      end
-
-      # Generate a component schema from an Alba resource and ActiveRecord model.
+      # Generate a component schema from an Alba resource and a model class.
       #
       # Automatically introspects the resource attributes and database schema
       # to generate appropriate OpenAPI component definitions with correct types,
-      # descriptions, and validation constraints.
+      # descriptions, and validation constraints. Introspection goes through
+      # SchemaIntrospection, so any supported persistence library (or a
+      # configured adapter) works; with none available, only block-declared
+      # properties are emitted.
       #
       # @param name [Symbol, String] The component name
       # @param resource [Alba::Resource] The Alba resource class
-      # @param active_record_class [Class] The ActiveRecord model class
+      # @param model [Class] The model class (e.g. an ActiveRecord model)
       # @yield [Component] The component object for additional configuration
       #
       # @example
@@ -258,8 +268,33 @@ module Raxon
       #     component.property :custom_field, type: :string
       #   end
       #
-      def self.from_resource(name, resource, active_record_class, &block)
-        default_spec.from_resource(name, resource, active_record_class, &block)
+      def self.from_resource(name, resource, model, &block)
+        default_spec.from_resource(name, resource, model, &block)
+      end
+
+      # Generate a component schema from an Alba resource and a database table.
+      #
+      # Sibling to {from_resource} for tables that have no model class (e.g.
+      # tables owned by a ROM relation). Columns are introspected through
+      # SchemaIntrospection using the detected database library, so the same
+      # type mapping applies.
+      #
+      # Unlike from_resource, inclusion validators cannot be introspected (there
+      # is no model class), so enum-like properties must be declared in the block
+      # via allowable_values.
+      #
+      # @param name [Symbol, String] The component name
+      # @param resource [Alba::Resource] The Alba resource class
+      # @param table_name [Symbol, String] The database table name
+      # @yield [Component] The component object for additional configuration
+      #
+      # @example
+      #   from_table(:ReleaseNote, ReleaseNoteResource, :release_notes) do |component|
+      #     component.property :created_by_name, type: :string, nullable: true
+      #   end
+      #
+      def self.from_table(name, resource, table_name, &block)
+        default_spec.from_table(name, resource, table_name, &block)
       end
 
       # Build a property from an Alba association.
@@ -275,45 +310,18 @@ module Raxon
         component.property attribute_name, type: :array, of: resource_name
       end
 
-      # Build a property from a database column.
+      # Build a property from a normalized column.
       #
       # @param component [Component] The component to add the property to
       # @param attribute_name [Symbol, String] The attribute name
-      # @param active_record_class [Class] The ActiveRecord model class
+      # @param column [SchemaIntrospection::Column] The normalized column
+      # @param allowable_values [Array, nil] Array of allowed values
       # @return [void]
       #
       # @private
-      def self.build_database_property(component, attribute_name, active_record_class)
-        return unless database_present?(active_record_class)
-
-        active_record_definition = active_record_class.columns_hash[attribute_name.to_s]
-        return if active_record_definition.nil?
-
-        sql_type = active_record_definition.sql_type
-        description = active_record_definition.comment.to_s
-        is_array_column = active_record_definition.respond_to?(:array) && active_record_definition.array
-        is_nullable = active_record_definition.null
-        allowable_values = extract_allowable_values(active_record_class, attribute_name)
-
-        property_options = build_property_options(sql_type, is_array_column, description, is_nullable, allowable_values)
+      def self.build_column_property(component, attribute_name, column, allowable_values: nil)
+        property_options = build_property_options(column.sql_type, column.array, column.comment.to_s, column.null, allowable_values)
         component.property attribute_name, **property_options
-      end
-
-      # Extract allowable values from inclusion validators for an attribute.
-      #
-      # @param active_record_class [Class] The ActiveRecord model class
-      # @param attribute_name [Symbol, String] The attribute name
-      # @return [Array, nil] Array of allowed values or nil if not present
-      #
-      # @private
-      def self.extract_allowable_values(active_record_class, attribute_name)
-        return nil unless active_record_class.respond_to?(:validators_on)
-
-        inclusion_validators = active_record_class.validators_on(attribute_name.to_sym).select { |v| v.is_a?(ActiveModel::Validations::InclusionValidator) }
-        return nil unless inclusion_validators.any?
-
-        validator = inclusion_validators.first
-        validator.options[:in].respond_to?(:to_a) ? validator.options[:in].to_a : nil
       end
 
       # Build property options hash based on SQL type.
@@ -338,7 +346,7 @@ module Raxon
           string_property_options(is_array_column, base_options)
         when "boolean"
           boolean_property_options(is_array_column, base_options)
-        when "timestamp(6) without time zone"
+        when /\Atimestamp/
           datetime_property_options(is_array_column, base_options)
         when "date"
           date_property_options(is_array_column, base_options)
@@ -765,7 +773,7 @@ module Raxon
       #
       def self.properties_to_json(properties)
         required_fields = properties.filter { |_, property| property.required }.keys.map(&:to_s)
-        property_definitions = properties.to_h { |name, property| property_to_json(name, property) }.compact_blank
+        property_definitions = properties.to_h { |name, property| property_to_json(name, property) }.reject { |_name, definition| definition.nil? || definition.empty? }
 
         result = {}
         result[:required] = required_fields unless required_fields.empty?

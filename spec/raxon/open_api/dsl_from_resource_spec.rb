@@ -37,6 +37,8 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
       "text" => "string",
       "boolean" => "boolean",
       "timestamp(6) without time zone" => "datetime",
+      "timestamp without time zone" => "datetime",
+      "timestamp with time zone" => "datetime",
       "date" => "date",
       "jsonb" => "object"
     }.each do |sql_type, expected_type|

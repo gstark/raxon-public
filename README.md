@@ -19,6 +19,7 @@ A lightweight, Rack 3 compatible JSON API framework for Ruby with file-based rou
 - 🗜️ **Conditional GET** - `response.etag` / `response.last_modified` helpers with automatic `304 Not Modified`
 - 🔐 **Security Schemes** - Declare OpenAPI security schemes once; optionally enforce them at runtime
 - 🧪 **Test Helpers** - `Raxon::Test` request helpers and an RSpec matcher that validates responses against your declared schemas
+- 🔌 **ORM-Agnostic** - No persistence dependencies; OpenAPI schemas introspect through ActiveRecord, Sequel/ROM, or a custom adapter when available
 
 ## Quick Start
 
@@ -893,6 +894,122 @@ Open `doc/apidoc/api.html` in your browser to view interactive Swagger UI docume
 - Try-it-out functionality
 - Example requests and responses
 
+## Database Integration
+
+Raxon has **no runtime dependency on any ORM** — not ActiveRecord, not Sequel, not ROM. Database-backed features activate based on what your application has loaded and degrade to no-ops otherwise:
+
+- **Schema introspection** (`from_resource` / `from_table` below) resolves an adapter per call: `config.schema_adapter` if you set one, otherwise ActiveRecord when it's loaded, otherwise Sequel when it's loaded (which covers ROM, since rom-sql connects through Sequel). With no adapter — or no reachable database, as in `rake openapi:generate` on CI — components emit only their block-declared properties.
+- **Instrumentation** uses `ActiveSupport::Notifications` when present and yields straight through when it isn't.
+
+### Generating Components from the Database
+
+Instead of hand-writing component schemas, derive them from what the database already knows. With a model class (e.g. ActiveRecord), use `from_resource` with an [Alba](https://github.com/okuramasafumi/alba) resource:
+
+```ruby
+Raxon::OpenApi::DSL.from_resource(:User, UserResource, User) do |component|
+  component.property :custom_field, type: :string  # block properties win over introspection
+end
+```
+
+Each resource attribute becomes a property typed from its database column (nullability from the column, description from the column comment, enums from ActiveRecord inclusion validators; Alba associations become arrays referencing the associated component).
+
+For tables with no model class — a ROM relation's table, for example — use `from_table` with the table name:
+
+```ruby
+Raxon::OpenApi::DSL.from_table(:ReleaseNote, ReleaseNoteResource, :release_notes) do |component|
+  component.property :status, type: :string, allowable_values: %w[draft published]
+end
+```
+
+Without a model class there are no validators to introspect, so declare enum-like properties in the block as shown.
+
+### Using Raxon with ROM
+
+rom-sql rides a Sequel connection, so once your ROM container is set up, Raxon's Sequel adapter is detected automatically — no Raxon configuration needed.
+
+```ruby
+# Gemfile
+gem "raxon"
+gem "rom"
+gem "rom-sql"
+```
+
+```ruby
+# config/app.rb — set up ROM as usual
+require "rom"
+
+rom_config = ROM::Configuration.new(:sql, ENV.fetch("DATABASE_URL"))
+
+class ReleaseNotes < ROM::Relation[:sql]
+  schema(:release_notes, infer: true)
+end
+
+rom_config.register_relation(ReleaseNotes)
+ROM_CONTAINER = ROM.container(rom_config)
+```
+
+Define an Alba resource for serialization, generate the component from the table, and query ROM in handlers:
+
+```ruby
+# app/resources/release_note_resource.rb
+class ReleaseNoteResource
+  include Alba::Resource
+
+  attributes :id, :title, :body, :created_at
+end
+
+Raxon::OpenApi::DSL.from_table(:ReleaseNote, ReleaseNoteResource, :release_notes)
+```
+
+```ruby
+# routes/api/v1/release_notes/get.rb
+Raxon.route do
+  description "List release notes"
+
+  response 200, type: :array, of: :ReleaseNote
+
+  handler do |_request, response, _metadata|
+    notes = ROM_CONTAINER.relations[:release_notes].with(auto_struct: true).to_a
+    response.ok ReleaseNoteResource.new(notes).serializable_hash
+  end
+end
+```
+
+Two things Sequel's schema parsing cannot provide, compared to ActiveRecord introspection:
+
+- **Column comments** are not exposed, so property descriptions default to `""` — declare `description:` in the component block where it matters.
+- **Enums** cannot be derived (no model validators) — declare `allowable_values:` in the block.
+
+If your app runs ROM *alongside* ActiveRecord (e.g. via `sequel-activerecord_connection`), the ActiveRecord adapter is detected first and introspects the same tables through the shared connection — `from_table` works identically, and column comments come back.
+
+### Custom Schema Adapters
+
+Any object implementing three methods can replace detection — return `nil` from any of them to mean "nothing introspectable":
+
+```ruby
+class StaticSchemaAdapter
+  Column = Raxon::OpenApi::SchemaIntrospection::Column
+
+  # => Hash of column name (String) to Column, or nil
+  def table_columns(table_name)
+    {
+      "id" => Column.new(name: "id", sql_type: "bigint", comment: nil, null: false, array: false),
+      "title" => Column.new(name: "title", sql_type: "text", comment: "Display title", null: true, array: false)
+    }
+  end
+
+  # Same shape, for from_resource model classes
+  def model_columns(model) = nil
+
+  # => Array of allowed values for the attribute, or nil
+  def enum_values(model, attribute_name) = nil
+end
+
+Raxon.configure do |config|
+  config.schema_adapter = StaticSchemaAdapter.new
+end
+```
+
 ## Configuration
 
 ### Basic Setup
@@ -939,6 +1056,7 @@ end
 - `filter_parameters` - Array of name fragments (strings/symbols) or `Regexp`s whose values are redacted from instrumentation/APM payloads. Defaults to common secret names (`password`, `token`, `secret`, `api_key`, `authorization`, `cookie`, `access_token`, `refresh_token`, …). Add your app's sensitive field names here.
 - `trust_proxy_headers` - Whether `request.remote_ip` may honor the client-supplied `X-Forwarded-For` / `X-Real-IP` headers (default: `false`). Leave `false` unless Raxon runs behind a reverse proxy you control that overwrites these headers — otherwise any client can spoof its IP. See [Security](#security).
 - `max_request_body_size` - Reject requests whose `Content-Length` exceeds this many bytes with `413 Payload Too Large`, before the body is read into memory (default: `nil`, no limit). This is a cheap first guard; for untrusted traffic also cap body size at your proxy/load balancer.
+- `schema_adapter` - Schema introspection source for `from_resource`/`from_table` (default: `nil`, auto-detects ActiveRecord then Sequel). Set to a custom adapter object to introspect another source (see [Database Integration](#database-integration)).
 
 ### Security
 

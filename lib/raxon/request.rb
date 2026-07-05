@@ -91,7 +91,7 @@ module Raxon
     #
     # @return [Hash] Query parameters with symbol keys
     def query_params
-      @query_params ||= @rack_request.GET.symbolize_keys
+      @query_params ||= @rack_request.GET.transform_keys(&:to_sym)
     end
 
     # Get JSON request body parameters only.
@@ -121,9 +121,9 @@ module Raxon
       @form_params = if json?
         {}
       else
-        post_params = @rack_request.POST.symbolize_keys
+        post_params = @rack_request.POST.transform_keys(&:to_sym)
         if post_params.empty? && form_content_type?
-          @rack_request.params.symbolize_keys.except(*query_params.keys)
+          @rack_request.params.transform_keys(&:to_sym).except(*query_params.keys)
         else
           post_params
         end
@@ -554,7 +554,7 @@ module Raxon
     # @private
     def symbolize_params(params)
       params.each_key do |key|
-        return params.symbolize_keys unless key.is_a?(Symbol)
+        return params.transform_keys(&:to_sym) unless key.is_a?(Symbol)
       end
 
       params

@@ -1,6 +1,11 @@
 # frozen_string_literal: true
 
-require "active_support/notifications"
+# ActiveSupport is optional: instrumentation is a no-op passthrough without it.
+begin
+  require "active_support/notifications"
+rescue LoadError
+end
+
 require_relative "instrumentation/active_record_runtime"
 
 module Raxon
@@ -9,8 +14,18 @@ module Raxon
   # Emits start_processing.action_controller and process_action.action_controller
   # events that match Rails payload format for compatibility with New Relic,
   # Datadog, Skylight, and other APM tools.
+  #
+  # Requires ActiveSupport::Notifications, which Raxon does not depend on;
+  # without it, instrument_request simply yields.
   module Instrumentation
     class << self
+      # Whether ActiveSupport::Notifications is loaded in the host application.
+      #
+      # @return [Boolean]
+      def available?
+        defined?(::ActiveSupport::Notifications) ? true : false
+      end
+
       # Instrument a request, emitting Rails-compatible notifications.
       #
       # @param request [Raxon::Request] The request object
@@ -19,6 +34,8 @@ module Raxon
       # @yield The request handling block
       # @return [Object] The return value of the block
       def instrument_request(request, response, endpoint)
+        return yield unless available?
+
         payload = build_payload(request, endpoint)
         ar_runtime = ActiveRecordRuntime.new
 

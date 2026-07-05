@@ -39,6 +39,16 @@ RSpec.describe Raxon::Instrumentation::ActiveRecordRuntime do
       expect(tracker.runtime).to eq(0)
     end
 
+    it "no-ops when ActiveSupport::Notifications is absent" do
+      hide_const("ActiveSupport::Notifications")
+      tracker = Raxon::Instrumentation::ActiveRecordRuntime.new
+
+      result = tracker.track { :handled }
+
+      expect(result).to eq(:handled)
+      expect(tracker.runtime).to eq(0)
+    end
+
     it "stops tracking after block completes" do
       tracker = Raxon::Instrumentation::ActiveRecordRuntime.new
 

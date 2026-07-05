@@ -8,10 +8,6 @@ require "pathname"
 require "rack"
 require "time"
 
-# Active Support dependencies
-require "active_support/core_ext/enumerable"
-require "active_support/core_ext/hash"
-
 # Load OpenAPI DSL library
 require_relative "raxon/open_api/property_container"
 require_relative "raxon/open_api/deferred_enum"

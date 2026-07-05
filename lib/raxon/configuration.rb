@@ -1,7 +1,7 @@
 module Raxon
   # Configuration for Raxon applications
   class Configuration
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trust_proxy_headers, :max_request_body_size, :logger
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trust_proxy_headers, :max_request_body_size, :logger, :schema_adapter
     alias_method :routes_directories, :routes_directory
     alias_method :routes_directories=, :routes_directory=
 
@@ -43,6 +43,11 @@ module Raxon
       # Route hot reloading: nil (default) enables it in development only;
       # true/false force it on or off. See RouteReloader.
       @reload_routes = nil
+      # Schema introspection adapter for from_resource/from_table. nil (default)
+      # auto-detects from the loaded persistence library (ActiveRecord, then
+      # Sequel). Set to any object implementing the adapter interface described
+      # in OpenApi::SchemaIntrospection to use a custom source.
+      @schema_adapter = nil
     end
 
     # Route hot reloading setting; nil means "development only".

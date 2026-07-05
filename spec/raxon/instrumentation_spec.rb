@@ -125,6 +125,34 @@ RSpec.describe Raxon::Instrumentation do
     end
   end
 
+  describe ".instrument_request without ActiveSupport" do
+    it "yields straight through when ActiveSupport::Notifications is absent" do
+      hide_const("ActiveSupport::Notifications")
+      rack_request = Rack::Request.new(Rack::MockRequest.env_for("/api/v1/users", method: "GET"))
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.path "/api/v1/users"
+      endpoint.operation :get
+      request = Raxon::Request.new(rack_request, endpoint)
+      response = Raxon::Response.new(endpoint)
+
+      result = Raxon::Instrumentation.instrument_request(request, response, endpoint) { :handled }
+
+      expect(result).to eq(:handled)
+    end
+  end
+
+  describe ".available?" do
+    it "is true when ActiveSupport::Notifications is loaded" do
+      expect(Raxon::Instrumentation.available?).to be(true)
+    end
+
+    it "is false when ActiveSupport::Notifications is absent" do
+      hide_const("ActiveSupport::Notifications")
+
+      expect(Raxon::Instrumentation.available?).to be(false)
+    end
+  end
+
   describe ".controller_from_endpoint" do
     it "extracts path without leading slash" do
       endpoint = Raxon::OpenApi::Endpoint.new

@@ -1,14 +1,13 @@
 # frozen_string_literal: true
 
-require "active_support"
-require "active_support/notifications"
-
 module Raxon
   module Instrumentation
     # Tracks ActiveRecord query time during a request.
     #
     # Subscribes to sql.active_record events during a block and accumulates
-    # the total time spent in database queries.
+    # the total time spent in database queries. Without
+    # ActiveSupport::Notifications loaded, tracking is a no-op and runtime
+    # stays 0.
     class ActiveRecordRuntime
       attr_reader :runtime
 
@@ -31,6 +30,8 @@ module Raxon
       private
 
       def start_tracking
+        return unless Instrumentation.available?
+
         @subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*args|
           event = ActiveSupport::Notifications::Event.new(*args)
           @runtime += event.duration

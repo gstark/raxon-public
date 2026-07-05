@@ -6,6 +6,9 @@ gem "ostruct"
 gem "thor", "~> 1.0"
 
 group :development, :test do
+  # Raxon has no runtime dependency on ActiveRecord; the suite exercises the
+  # ActiveRecord schema-introspection adapter and instrumentation against it.
+  gem "activerecord", ">= 7.0", "< 9"
   gem "flog"
   gem "puma", "~> 7.0"
   gem "rake", "~> 13.0"

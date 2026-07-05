@@ -26,7 +26,6 @@ Gem::Specification.new do |spec|
   spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "activerecord", ">= 7.0", "< 9"
   spec.add_dependency "alba", "~> 3"
   spec.add_dependency "dry-initializer", "~> 3"
   spec.add_dependency "dry-schema", "~> 1"
