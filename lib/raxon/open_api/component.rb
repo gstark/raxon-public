@@ -36,6 +36,11 @@ module Raxon
       #   @return [Symbol, String, nil] For array types, the type of array elements
       option :of, optional: true
 
+      # @!attribute [r] extensions
+      #   @return [Hash] OpenAPI specification extensions merged into the emitted
+      #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
+      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
+
       # @!attribute [r] properties
       #   @return [Hash] Hash of property definitions
       option :properties, default: proc { {} }

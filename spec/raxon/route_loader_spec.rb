@@ -638,6 +638,17 @@ RSpec.describe Raxon::RouteLoader do
       expect(catchall.responses).not_to be_empty
     end
 
+    it "does not appear in the generated OpenAPI document" do
+      Raxon::RouteLoader.register_catchall do |endpoint|
+        endpoint.handler do |request, response, metadata|
+          response.code = :not_found
+        end
+      end
+
+      expect(Raxon::OpenApi::DSL.endpoints).to be_empty
+      expect(Raxon::OpenApi::DSL.to_open_api["paths"]).not_to have_key("/*")
+    end
+
     it "is cleared when reset! is called" do
       Raxon::RouteLoader.register_catchall do |endpoint|
         endpoint.handler do |request, response, metadata|

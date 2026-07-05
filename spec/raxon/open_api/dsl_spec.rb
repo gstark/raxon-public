@@ -168,7 +168,7 @@ RSpec.describe Raxon::OpenApi::DSL do
             ],
             "responses" => {
               "200" => {
-                "description" => "",
+                "description" => "OK",
                 "headers" => {},
                 "content" => {
                   "application/json" => {
@@ -846,6 +846,78 @@ RSpec.describe Raxon::OpenApi::DSL do
       response_schema = spec["paths"]["/api/v1/items/:id"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
 
       expect(response_schema).to eq({"$ref" => "#/components/schemas/Primary"})
+    end
+
+    it "defaults response descriptions to the HTTP reason phrase" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/things")
+        endpoint.response(200, type: :object)
+        endpoint.response(:not_found, type: :object, description: "No such thing")
+      end
+
+      responses = described_class.to_open_api["paths"]["/api/v1/things"]["get"]["responses"]
+
+      expect(responses["200"]["description"]).to eq("OK")
+      expect(responses["404"]["description"]).to eq("No such thing")
+    end
+
+    it "excludes middleware-only route endpoints from the document" do
+      described_class.endpoint do |endpoint|
+        endpoint.path("/api/v1")
+        endpoint.method = "all"
+        endpoint.operation(Raxon::RouteLoader::ACTUAL_HTTP_METHODS.map(&:to_sym))
+        endpoint.route_file_path = "routes/api/v1/all.rb"
+        endpoint.before { |request, response, metadata| }
+      end
+
+      described_class.endpoint do |endpoint|
+        endpoint.path("/api/v1/things")
+        endpoint.method = "get"
+        endpoint.operation(:get)
+        endpoint.route_file_path = "routes/api/v1/things/get.rb"
+        endpoint.response(200, type: :object)
+        endpoint.handler { |request, response, metadata| }
+      end
+
+      paths = described_class.to_open_api["paths"]
+
+      expect(paths).not_to have_key("/api/v1")
+      expect(paths).to have_key("/api/v1/things")
+    end
+
+    it "documents handler-less endpoints that have no route file" do
+      described_class.endpoint do |endpoint|
+        endpoint.path("/legacy/things")
+        endpoint.operation(:get)
+        endpoint.response(200, type: :object)
+      end
+
+      expect(described_class.to_open_api["paths"]).to have_key("/legacy/things")
+    end
+
+    it "prefers a route endpoint over a DSL-declared endpoint on a path+method collision" do
+      described_class.endpoint do |endpoint|
+        endpoint.path("/api/v1/things")
+        endpoint.method = "get"
+        endpoint.operation(:get)
+        endpoint.route_file_path = "routes/api/v1/things/get.rb"
+        endpoint.description("From the route file")
+        endpoint.response(200, type: :object)
+        endpoint.handler { |request, response, metadata| }
+      end
+
+      # Declared after the route loads, yet the route still wins.
+      described_class.endpoint do |endpoint|
+        endpoint.path("/api/v1/things")
+        endpoint.operation(:get)
+        endpoint.description("From the legacy declaration")
+        endpoint.response(200, type: :object)
+      end
+
+      operation = described_class.to_open_api["paths"]["/api/v1/things"]["get"]
+
+      expect(operation["description"]).to eq("From the route file")
     end
   end
 

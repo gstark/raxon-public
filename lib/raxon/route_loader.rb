@@ -163,15 +163,16 @@ module Raxon
       #     end
       #   end
       def register_catchall(&block)
-        OpenApi::DSL.endpoint do |endpoint|
-          endpoint.path("/*")
-          endpoint.method = "all"
-          endpoint.operation(:get)
+        # Built directly (not via OpenApi::DSL.endpoint) so the catchall's
+        # synthetic "/*" path never appears in the generated OpenAPI document.
+        endpoint = OpenApi::Endpoint.new
+        endpoint.path("/*")
+        endpoint.method = "all"
+        endpoint.operation(:get)
 
-          block.call(endpoint)
+        block.call(endpoint)
 
-          @catchall = endpoint
-        end
+        @catchall = endpoint
       end
 
       private

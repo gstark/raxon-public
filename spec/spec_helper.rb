@@ -43,6 +43,10 @@ RSpec.configure do |config|
     end
     Raxon::RouteLoader.reset!
     Raxon::OpenApi::DSL.reset!
+    # Helpers load once per process; without this reset, a test that loads
+    # helpers leaves the flag set and a later test's Router.new silently skips
+    # loading its own helpers_path (order-dependent flake).
+    Raxon.instance_variable_set(:@helpers_loaded, false)
   end
 
   # Load fixture routes when load_routes: true is set on a spec

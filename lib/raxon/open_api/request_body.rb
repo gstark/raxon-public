@@ -43,6 +43,11 @@ module Raxon
       #   @return [Boolean] Whether the request body is required (default: true)
       option :required, default: proc { true }
 
+      # @!attribute [r] extensions
+      #   @return [Hash] OpenAPI specification extensions merged into the emitted
+      #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
+      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
+
       # @!attribute [r] properties
       #   @return [Hash] Hash of property definitions
       option :properties, default: proc { {} }

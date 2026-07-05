@@ -127,6 +127,9 @@ RSpec.describe Raxon::RouteReloader do
 
     File.write(helper_path, <<~RUBY)
       module Raxon::HandlerHelpers
+        # The suite runs with $VERBOSE on; drop the previous definition so the
+        # reload's redefinition doesn't emit a method-redefined warning.
+        remove_method :reloader_greeting
         def reloader_greeting = "goodbye"
       end
     RUBY

@@ -113,6 +113,11 @@ module Raxon
       #   @return [Boolean, nil] Whether array items must be unique
       option :unique_items, optional: true
 
+      # @!attribute [r] extensions
+      #   @return [Hash] OpenAPI specification extensions merged into the emitted
+      #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
+      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
+
       # @!attribute [r] properties
       #   @return [Hash] Hash of nested property definitions for object types
       option :properties, default: proc { {} }

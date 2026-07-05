@@ -68,6 +68,11 @@ module Raxon
       #   @return [Boolean] Whether the response can be null (default: false)
       option :nullable, default: proc { false }
 
+      # @!attribute [r] extensions
+      #   @return [Hash] OpenAPI specification extensions merged into the emitted
+      #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
+      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
+
       # @!attribute [r] properties
       #   @return [Hash] Hash of property definitions
       option :properties, default: proc { {} }

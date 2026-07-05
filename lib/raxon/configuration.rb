@@ -1,7 +1,7 @@
 module Raxon
   # Configuration for Raxon applications
   class Configuration
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trust_proxy_headers, :max_request_body_size, :logger, :schema_adapter
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trust_proxy_headers, :max_request_body_size, :logger, :schema_adapter
     alias_method :routes_directories, :routes_directory
     alias_method :routes_directories=, :routes_directory=
 
@@ -13,6 +13,16 @@ module Raxon
       # OpenAPI document version to emit: "3.1" (default) or "3.0". Distinct
       # from openapi_version, which is the API's own info.version.
       @openapi_spec_version = ENV.fetch("RAXON_OPENAPI_SPEC_VERSION", "3.1")
+      # Specification extensions applied to every schema emitted with a given
+      # DSL type name. Useful for extensions that must appear on introspected
+      # columns (from_resource/from_table), where there is no call site to pass
+      # extensions: explicitly. Explicit extensions win on key conflicts.
+      #
+      #   config.openapi_type_extensions = {
+      #     datetime: {"x-ts-type" => "Dayjs"},
+      #     date: {"x-ts-type" => "Dayjs"}
+      #   }
+      @openapi_type_extensions = {}
       @on_error = nil
       @helpers_path = nil
       @root = nil
