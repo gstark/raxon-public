@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Endpoint#exception_error` now documents the body `Raxon::Response#error`
+  actually produces (`{error: string}`); it previously declared an `errors`
+  array that no response helper emits, which surfaced as false validation
+  failures once symbol-status response validation was fixed (below)
 - Response body validation now runs for responses declared with a symbol status
   - `Endpoint#response_schemas` keyed schemas by the declared status (a symbol for
     `exception_error` / `response :unprocessable_entity`), but the lookup used the

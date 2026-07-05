@@ -248,7 +248,7 @@ RSpec.describe Raxon::OpenApi::Endpoint do
       expect(response).to be_a(Raxon::OpenApi::Response)
       expect(response.type).to eq("object")
       expect(response.description).to eq("Validation error")
-      expect(response.properties.keys).to contain_exactly(:errors)
+      expect(response.properties.keys).to contain_exactly(:error)
     end
 
     it "accepts custom status code" do

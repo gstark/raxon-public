@@ -408,10 +408,10 @@ module Raxon
 
       # Define a standard validation-error response for this endpoint.
       #
-      # Documents the canonical validation-error body: an `errors` array of
-      # human-readable messages (e.g. ActiveModel `full_messages`). This matches
-      # the shape produced by the application's exception/record-invalid render
-      # helpers.
+      # Documents the canonical validation-error body: `{error: message}`, the
+      # shape produced by {Raxon::Response#error}. Handlers that report multiple
+      # messages should join them into one string (e.g. ActiveModel
+      # `full_messages.to_sentence`) or declare their own response shape.
       #
       # @param status [Symbol, Integer] HTTP status code (default: :unprocessable_entity)
       # @param description [String] Response description (default: "Validation error")
@@ -421,7 +421,7 @@ module Raxon
       #   endpoint.exception_error :bad_request, description: "Invalid request"
       def exception_error(status = :unprocessable_entity, description: "Validation error")
         response(status, type: :object, description: description) do |resp|
-          resp.property :errors, type: :array, of: :string, description: "Validation error messages"
+          resp.property :error, type: :string, description: "Validation error message"
         end
       end
 

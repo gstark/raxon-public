@@ -107,10 +107,10 @@ RSpec.describe Raxon::EndpointInvocation do
     # validated. Keys are now normalized to integers.
     it "validates a response declared with a symbol status" do
       endpoint = Raxon::OpenApi::Endpoint.new
-      endpoint.exception_error # :unprocessable_entity (422), body shape {errors: [string]}
+      endpoint.exception_error # :unprocessable_entity (422), body shape {error: string}
       endpoint.handler do |_req, res, _meta|
         res.code = :unprocessable_entity
-        res.body = {error: "wrong shape"} # missing required :errors array
+        res.body = {errors: ["wrong shape"]} # missing required :error string
       end
 
       response = run(endpoint)
@@ -125,13 +125,13 @@ RSpec.describe Raxon::EndpointInvocation do
       endpoint.exception_error
       endpoint.handler do |_req, res, _meta|
         res.code = :unprocessable_entity
-        res.body = {errors: ["bad input"]}
+        res.body = {error: "bad input"}
       end
 
       response = run(endpoint)
 
       expect(response.status_code).to eq(422)
-      expect(response.body).to eq(errors: ["bad input"])
+      expect(response.body).to eq(error: "bad input")
     end
   end
 
