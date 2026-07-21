@@ -144,22 +144,31 @@ module Raxon
       config = Raxon.configuration
       metadata = request.metadata
 
-      begin
-        if config.around_blocks.empty? && !config.rails_compatible_instrumentation
+      if config.around_blocks.empty? && !config.rails_compatible_instrumentation
+        dispatch_with_exception_handlers(request, response, metadata, config) do
           execute_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
-        else
-          execute_wrapped_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
         end
-      rescue Raxon::HaltException
-        raise # Let HaltException propagate (flow control)
-      rescue => exception
-        handler = find_exception_handler(exception, config.exception_handlers)
-        if handler
-          handler.call(exception, request, response, metadata)
-        else
-          raise # Propagate to ErrorHandler middleware
-        end
+      else
+        execute_wrapped_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
       end
+    end
+
+    # Runs the block, dispatching rescuable exceptions to configured handlers.
+    # Must run INSIDE instrumentation so the logged status reflects what the
+    # handler wrote to the response (previously the log claimed the pre-error
+    # status, e.g. "200 OK" for a request whose handler answered 422). The
+    # handled exception is stashed in request metadata so instrumentation can
+    # still include it in the payload despite it never propagating.
+    def dispatch_with_exception_handlers(request, response, metadata, config)
+      yield
+    rescue Raxon::HaltException
+      raise # Let HaltException propagate (flow control)
+    rescue => exception
+      handler = find_exception_handler(exception, config.exception_handlers)
+      raise unless handler # Propagate to ErrorHandler middleware
+
+      request.metadata[:handled_exception] = exception
+      handler.call(exception, request, response, metadata)
     end
 
     def execute_request_pipeline(request, response, handler_endpoint, endpoints, metadata, config)
@@ -187,13 +196,18 @@ module Raxon
         proc { around_block.call(request, response, metadata, &inner) }
       end
 
-      # Wrap with instrumentation if enabled
+      # Wrap with instrumentation if enabled. Exception handlers run inside
+      # the instrumented block so the logged status is the handler's status.
       if config.rails_compatible_instrumentation
         Instrumentation.instrument_request(request, response, handler_endpoint) do
-          wrapped_execution.call
+          dispatch_with_exception_handlers(request, response, metadata, config) do
+            wrapped_execution.call
+          end
         end
       else
-        wrapped_execution.call
+        dispatch_with_exception_handlers(request, response, metadata, config) do
+          wrapped_execution.call
+        end
       end
     end
 

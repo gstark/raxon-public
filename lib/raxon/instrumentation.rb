@@ -49,7 +49,20 @@ module Raxon
           payload[:exception] = [exception.class.name, exception.message]
           raise
         ensure
-          payload[:status] = response.status_code
+          # An exception that escaped the block was NOT handled: the response
+          # object still holds the pre-error status, and the real answer will
+          # come from error-handling middleware — log 500 rather than the
+          # stale status. Handled exceptions (dispatched inside the block)
+          # never raise through here; surface them from request metadata.
+          if $! && !$!.is_a?(Raxon::HaltException)
+            payload[:status] = 500
+          else
+            payload[:status] = response.status_code
+          end
+          if (handled = request.metadata[:handled_exception])
+            payload[:exception] ||= [handled.class.name, handled.message]
+            payload[:exception_object] ||= handled
+          end
           payload[:db_runtime] = ar_runtime.runtime
           payload[:view_runtime] = 0
         end
