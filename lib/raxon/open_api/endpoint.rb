@@ -513,6 +513,14 @@ module Raxon
         @request_schema
       end
 
+      # Whether this endpoint declares anything to validate, answered from the
+      # declarations without compiling the schema.
+      #
+      # @return [Boolean]
+      def request_schema?
+        @parameters.parameters.any? || @request_body&.properties&.any? || false
+      end
+
       # Generate Dry::Schema validators for this endpoint's responses.
       #
       # Keys are normalized to integer status codes (via {DocumentBuilder.status_to_code}) so

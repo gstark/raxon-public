@@ -11,7 +11,7 @@ module Raxon
       @endpoints = endpoints.freeze
       @declaration_endpoints = endpoints.select { |endpoint| endpoint.equal?(leaf) || endpoint.method == "all" }.freeze
       @parameters, parameter_sources = compose_parameters
-      @request_schema = OpenApi::RequestSchemaGenerator.new(@parameters, leaf.request_body).to_dry_schema
+      @request_schema = RequestSchema.new(@parameters, leaf.request_body)
       @responses, response_sources = compose_responses
       @response_schemas = build_response_schemas
       @security, security_source = nearest(:security)
@@ -25,7 +25,15 @@ module Raxon
     end
 
     def request_body = leaf.request_body
-    attr_reader :request_schema
+
+    # The compiled request schema, or nil when the endpoint declares nothing to
+    # validate. Compiled on first use — see {RequestSchema}.
+    def request_schema = @request_schema.schema
+
+    # Whether this endpoint declares anything to validate, answered without
+    # compiling the schema.
+    def request_schema? = @request_schema.declared?
+
     def handler_block = leaf.handler_block
     def handler_mode = leaf.handler_mode
     def representation = leaf.representation
@@ -44,13 +52,74 @@ module Raxon
 
     attr_reader :response_schemas
 
+    # The endpoint's request schema, compiled on first use.
+    #
+    # Same reasoning as {ResponseSchemas}: dry-schema compilation dominates route
+    # loading, and a schema is only needed once a request actually reaches the
+    # endpoint. #declared? answers "is there anything to validate" from the
+    # declarations alone, so the common "no parameters, no body" endpoint never
+    # compiles anything.
+    class RequestSchema
+      def initialize(parameters, request_body)
+        @parameters = parameters
+        @request_body = request_body
+        @mutex = Mutex.new
+      end
+
+      # @return [Boolean] whether any parameter or body property is declared
+      def declared?
+        @parameters.parameters.any? || @request_body&.properties&.any? || false
+      end
+
+      # @return [Dry::Schema::Params, FileUploadValidator, nil]
+      def schema
+        return @schema if defined?(@schema)
+
+        @mutex.synchronize do
+          next @schema if defined?(@schema)
+
+          @schema = OpenApi::RequestSchemaGenerator.new(@parameters, @request_body).to_dry_schema
+        end
+      end
+    end
+
+    # Response schemas compiled on first use, keyed by status code.
+    #
+    # Compiling every declared response for every route is the single most
+    # expensive thing route loading can do: dry-schema compilation is not cheap,
+    # and an app with a few hundred routes declaring a handful of responses each
+    # pays it hundreds of times before it serves a request. Almost all of that
+    # work is wasted — response validation is opt-in and off by default, and even
+    # when it is on an endpoint only ever needs the schema for the status it
+    # actually answers with.
+    class ResponseSchemas
+      def initialize(responses)
+        @responses = responses
+        @cache = {}
+        @mutex = Mutex.new
+      end
+
+      # @param code [Integer] HTTP status code
+      # @return [Dry::Schema::Params, nil]
+      def [](code)
+        return @cache[code] if @cache.key?(code)
+
+        @mutex.synchronize do
+          next @cache[code] if @cache.key?(code)
+
+          # A status can be declared twice — `exception_error` (:unprocessable_entity)
+          # alongside an explicit `response 422`, say. Building the whole hash let
+          # the later declaration overwrite the earlier one, so match from the end.
+          response = @responses.to_a.reverse.find { |status, _| OpenApi::DocumentBuilder.status_to_code(status) == code }&.last
+          @cache[code] = response && OpenApi::ResponseSchemaGenerator.new(response).to_dry_schema
+        end
+      end
+    end
+
     private
 
     def build_response_schemas
-      responses.each_with_object({}) do |(status, response), schemas|
-        schema = OpenApi::ResponseSchemaGenerator.new(response).to_dry_schema
-        schemas[OpenApi::DocumentBuilder.status_to_code(status)] = schema if schema
-      end
+      ResponseSchemas.new(responses)
     end
 
     def compose_parameters

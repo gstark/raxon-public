@@ -260,13 +260,16 @@ module Raxon
     # @param response [Raxon::Response]
     # @return [void]
     def validate_response_body(response)
-      status_code = response.status_code
-      schema = @handler_endpoint.response_schemas[status_code]
-
-      return unless schema && response.body
-
+      # Ask whether validation runs at all before looking the schema up: schemas
+      # are compiled on first use, so an app with validation off should never
+      # compile one.
       validation_mode = response_validation_mode
       return if validation_mode == false
+      return unless response.body
+
+      status_code = response.status_code
+      schema = @handler_endpoint.response_schemas[status_code]
+      return unless schema
 
       result = schema.call(response.body)
       return if result.success?

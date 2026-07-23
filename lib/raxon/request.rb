@@ -226,7 +226,9 @@ module Raxon
     #
     # @private
     def simple_get_without_validation?
-      return false unless @endpoint && @endpoint.request_schema.nil? && @endpoint.request_body.nil?
+      # Asks whether a schema is declared rather than for the schema itself, so
+      # the fast path never compiles one.
+      return false unless @endpoint && !@endpoint.request_schema? && @endpoint.request_body.nil?
       return false unless @rack_request.get? || @rack_request.head?
       return false unless @rack_request.query_string.empty?
 
