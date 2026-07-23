@@ -96,16 +96,65 @@ module Raxon
   #     response.body = { error: "Unauthorized" }
   #     response.halt  # Raises HaltException
   #   end
-  class HaltException < StandardError
-    attr_reader :response
+  # Sentinel distinguishing "no body given" from an explicit nil body, shared by
+  # Raxon.halt and HaltException.
+  NOTHING = Object.new.freeze
+  private_constant :NOTHING
 
-    # Initialize a HaltException with the response to return.
+  class HaltException < StandardError
+    attr_reader :response, :code, :headers
+
+    # Carries either a prepared Response (raised by Response#halt) or a
+    # code/body/headers tuple (raised by Raxon.halt) that the Router applies to
+    # the response it already owns.
     #
-    # @param response [Raxon::Response] The response object to return
-    def initialize(response)
+    # @param response [Raxon::Response, nil] A prepared response, or nil to carry a tuple
+    # @param code [Symbol, Integer, nil] Status for the tuple form
+    # @param body [Object] Body for the tuple form; omitted leaves the body unchanged
+    # @param headers [Hash, nil] Headers for the tuple form
+    def initialize(response = nil, code: nil, body: NOTHING, headers: nil)
       @response = response
+      @code = code
+      @body = body
+      @headers = headers
       super("Request processing halted")
     end
+
+    # @return [Boolean] whether a prepared response is carried
+    def carries_response?
+      !@response.nil?
+    end
+
+    # @return [Boolean] whether the tuple form set a body
+    def body?
+      !@body.equal?(NOTHING)
+    end
+
+    # The tuple body (only meaningful when {#body?}).
+    attr_reader :body
+  end
+
+  # Halt the current request with a status and body, without a Response instance
+  # to call. The Router applies these to the response it is building, so a guard
+  # helper or a plain method can short-circuit a request without taking
+  # `response` as an argument solely to reach Response#halt.
+  #
+  #   def authorize!(record, action)
+  #     Raxon.halt(code: :forbidden, body: {error: "Unauthorized"}) unless allowed?
+  #   end
+  #
+  # Response#halt remains for the cases that first set headers or other state on
+  # the response before stopping. Both raise the same HaltException the Router
+  # unwinds to, so they skip the handler and after blocks identically.
+  #
+  # @param code [Symbol, Integer, nil] HTTP status for the response
+  # @param body [Object] Response body; omit to leave the in-flight body unchanged
+  # @param headers [Hash, nil] Headers to set on the response
+  # @raise [Raxon::HaltException] always
+  def self.halt(code: nil, body: NOTHING, headers: nil)
+    attributes = {code: code, headers: headers}
+    attributes[:body] = body unless body.equal?(NOTHING)
+    raise HaltException.new(**attributes)
   end
 
   @configuration = Configuration.new

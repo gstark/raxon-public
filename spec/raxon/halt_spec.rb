@@ -211,6 +211,99 @@ RSpec.describe "Response#halt" do
   end
 end
 
+RSpec.describe "Raxon.halt" do
+  it "halts a handler with a status and body, without a Response instance" do
+    handler_reached_end = false
+
+    define_route("routes/guarded/get.rb") do |endpoint|
+      endpoint.handler do |_request, _response, _metadata|
+        Raxon.halt(code: :forbidden, body: {error: "Not allowed"})
+        handler_reached_end = true
+      end
+    end
+
+    status, _headers, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/guarded", method: "GET"))
+
+    expect(status).to eq(403)
+    expect(JSON.parse(body.first)).to eq("error" => "Not allowed")
+    expect(handler_reached_end).to eq(false)
+  end
+
+  it "works from a helper method that never receives the response" do
+    define_route("routes/viahelper/get.rb") do |endpoint|
+      endpoint.handler do |_request, response, _metadata|
+        # A guard that halts without taking `response`.
+        deny = -> { Raxon.halt(code: :unauthorized, body: {error: "Sign in"}) }
+        deny.call
+        response.ok(never: true)
+      end
+    end
+
+    status, _headers, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/viahelper", method: "GET"))
+
+    expect(status).to eq(401)
+    expect(JSON.parse(body.first)).to eq("error" => "Sign in")
+  end
+
+  it "preserves headers set on the response before the halt" do
+    define_route("routes/withheaders/get.rb") do |endpoint|
+      endpoint.before do |_request, response, _metadata|
+        response.header "X-Before", "ran"
+      end
+      endpoint.handler do |_request, _response, _metadata|
+        Raxon.halt(code: :forbidden, body: {error: "no"})
+      end
+    end
+
+    status, headers, _body = Raxon::Router.new.call(Rack::MockRequest.env_for("/withheaders", method: "GET"))
+
+    expect(status).to eq(403)
+    expect(headers["X-Before"]).to eq("ran")
+  end
+
+  it "can set its own headers" do
+    define_route("routes/haltheaders/get.rb") do |endpoint|
+      endpoint.handler do |_request, _response, _metadata|
+        Raxon.halt(code: :too_many_requests, body: {error: "slow down"}, headers: {"Retry-After" => "30"})
+      end
+    end
+
+    status, headers, _body = Raxon::Router.new.call(Rack::MockRequest.env_for("/haltheaders", method: "GET"))
+
+    expect(status).to eq(429)
+    expect(headers["Retry-After"]).to eq("30")
+  end
+
+  it "halts a before block, skipping the handler" do
+    handler_called = false
+
+    define_route("routes/beforehalt/get.rb") do |endpoint|
+      endpoint.before { |_request, _response, _metadata| Raxon.halt(code: :unauthorized, body: {error: "no"}) }
+      endpoint.handler { |_request, _response, _metadata| handler_called = true }
+    end
+
+    status, _headers, _body = Raxon::Router.new.call(Rack::MockRequest.env_for("/beforehalt", method: "GET"))
+
+    expect(status).to eq(401)
+    expect(handler_called).to eq(false)
+  end
+
+  it "leaves the body unset when only a code is given" do
+    define_route("routes/codeonly/delete.rb") do |endpoint|
+      endpoint.handler do |_request, response, _metadata|
+        response.body = {will: "be replaced by nothing"}
+        Raxon.halt(code: :no_content)
+      end
+    end
+
+    status, _headers, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/codeonly", method: "DELETE"))
+
+    expect(status).to eq(204)
+    # Body was set before the halt and left untouched (no body given to halt).
+    expect(JSON.parse(body.first)).to eq("will" => "be replaced by nothing")
+  end
+end
+
 RSpec.describe "halt from a catchall handler" do
   it "returns the halted response for unmatched routes" do
     Raxon::RouteLoader.register_catchall do |endpoint|

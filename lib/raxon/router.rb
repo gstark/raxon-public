@@ -120,9 +120,7 @@ module Raxon
       begin
         execute_request(wrapper_request, wrapper_response, effective_endpoint, endpoints)
       rescue Raxon::HaltException => e
-        # HaltException carries the response - use it instead of wrapper_response
-        # This allows halt to be called with a custom response
-        wrapper_response = e.response
+        wrapper_response = response_from_halt(e, wrapper_response)
       rescue Raxon::RequestBodyTooLarge
         return payload_too_large_response
       rescue Rack::BadRequest => e
@@ -136,6 +134,23 @@ module Raxon
     end
 
     private
+
+    # Resolve a caught HaltException into the response to send. Response#halt
+    # carries a prepared response; Raxon.halt carries a code/body/headers tuple,
+    # which is applied to the response the Router already owns so headers and
+    # other state set earlier in the request survive.
+    #
+    # @param exception [Raxon::HaltException]
+    # @param owned_response [Raxon::Response]
+    # @return [Raxon::Response]
+    def response_from_halt(exception, owned_response)
+      return exception.response if exception.carries_response?
+
+      owned_response.code = exception.code if exception.code
+      exception.headers&.each { |name, value| owned_response.header(name, value) }
+      owned_response.body = exception.body if exception.body?
+      owned_response
+    end
 
     def debug_log
       return unless @debug
@@ -262,7 +277,7 @@ module Raxon
       begin
         execute_request(wrapper_request, wrapper_response, endpoint, [endpoint])
       rescue Raxon::HaltException => e
-        wrapper_response = e.response
+        wrapper_response = response_from_halt(e, wrapper_response)
       rescue Raxon::RequestBodyTooLarge
         return payload_too_large_response
       rescue Rack::BadRequest => e
@@ -312,7 +327,7 @@ module Raxon
       begin
         handler.call(request, response)
       rescue Raxon::HaltException => e
-        response = e.response
+        response = response_from_halt(e, response)
       end
 
       response.to_rack
