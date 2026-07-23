@@ -15,7 +15,15 @@ module Raxon
   # The body may be passed positionally or as keywords, matching Response#ok and
   # its siblings. +headers:+ is reserved, so a body that needs its own "headers"
   # key must be passed positionally.
-  Outcome = Data.define(:status, :body, :headers)
+  #
+  # A status the handler computes has no constructor to name, so it builds one
+  # directly. +body+ and +headers+ default there too, matching the constructors —
+  # a trailing empty hash on every call is noise:
+  #
+  #   Raxon::Outcome.new(result.status, {error: result.error})
+  Outcome = Data.define(:status, :body, :headers) do
+    def initialize(status:, body: nil, headers: {}) = super
+  end
 
   Response::STATUS_CODES.each do |status, code|
     Outcome.define_singleton_method(status) do |body = nil, headers: {}, **rest|

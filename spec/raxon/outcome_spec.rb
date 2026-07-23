@@ -49,4 +49,26 @@ RSpec.describe Raxon::Outcome do
   it "still builds directly with a status code" do
     expect(described_class.new(418, {tipped: true}, {}).status).to eq(418)
   end
+
+  # A handler with a computed status has no constructor to name.
+  describe "building directly with a computed status" do
+    it "defaults headers, so a trailing empty hash is not required" do
+      outcome = described_class.new(:unprocessable_entity, {error: "nope"})
+
+      expect(outcome.status).to eq(:unprocessable_entity)
+      expect(outcome.body).to eq({error: "nope"})
+      expect(outcome.headers).to eq({})
+    end
+
+    it "defaults the body as well" do
+      expect(described_class.new(:no_content).body).to be_nil
+    end
+
+    it "still accepts keywords" do
+      outcome = described_class.new(status: 418, body: {tipped: true})
+
+      expect(outcome.status).to eq(418)
+      expect(outcome.body).to eq({tipped: true})
+    end
+  end
 end
