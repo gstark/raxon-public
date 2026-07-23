@@ -97,6 +97,30 @@ handle do |request|
 end
 ```
 
+`Raxon::Outcome` has a constructor for every status symbol, so a handler names
+the status instead of spelling out the tuple. The body may be positional or
+keywords, matching `response.ok`; `headers:` is reserved, so a body carrying its
+own `headers` key must be passed positionally.
+
+```ruby
+Raxon::Outcome.created(id: user.id)
+Raxon::Outcome.unprocessable_entity(error: "Name can't be blank")
+Raxon::Outcome.no_content
+Raxon::Outcome.ok({report: rows}, headers: {"cache-control" => "no-store"})
+```
+
+An outcome is ordinary control flow: unlike `response.halt` it does not raise, so
+`after` blocks still run. Returning one from a guard clause is the return-value
+spelling of an early exit:
+
+```ruby
+handle do |request|
+  next Raxon::Outcome.forbidden(error: "Admins only") unless Current.account.admin?
+
+  {widgets: Widget.all.map(&:to_h)}
+end
+```
+
 `handle` can still receive `response` for a terminal exceptional response. The
 success path stays a returned value; redirects, streams, conditional responses,
 and other unusual HTTP behavior should continue to use `handler`.
