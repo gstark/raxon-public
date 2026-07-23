@@ -113,11 +113,13 @@ module Raxon
       #     body.is_a?(Alba::Resource) ? body.serializable_hash : body
       #   }
       #
-      # It runs on the top-level body only (a returned serializer, or one passed
-      # to response.ok / Raxon::Outcome), not on serializer objects nested inside
-      # a plain Hash — serialize those where they sit. It receives every body,
-      # including nil and already-plain hashes, so it must return anything it does
-      # not recognize unchanged. nil (default) leaves the body untouched.
+      # It is applied to the body and, recursively, to every element of any Hash
+      # or Array it produces, so a serializer object nested anywhere — under a
+      # key, inside an array, returned from another serializer's field — is
+      # coerced too, not only a top-level one. It therefore receives every node,
+      # including nil, plain hashes, and leaf strings, and must return anything it
+      # does not recognize unchanged (the recursion rebuilds a container only when
+      # a descendant actually changed). nil (default) leaves the body untouched.
       @body_serializer = nil
     end
 

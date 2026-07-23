@@ -491,6 +491,35 @@ RSpec.describe Raxon::Response do
       expect(response.serializable_body).to eq({plain: true})
     end
 
+    it "coerces a serializer nested under a key" do
+      response = Raxon::Response.new
+      response.body = {conversation: serializer_class.new({id: 7})}
+
+      expect(response.serializable_body).to eq({conversation: {id: 7}})
+    end
+
+    it "coerces serializers inside an array" do
+      response = Raxon::Response.new
+      response.body = {items: [serializer_class.new({id: 1}), serializer_class.new({id: 2})]}
+
+      expect(response.serializable_body).to eq({items: [{id: 1}, {id: 2}]})
+    end
+
+    it "coerces a serializer returned inside another serializer's data" do
+      response = Raxon::Response.new
+      response.body = serializer_class.new({owner: serializer_class.new({id: 9})})
+
+      expect(response.serializable_body).to eq({owner: {id: 9}})
+    end
+
+    it "returns the same hash object when nothing was coerced" do
+      response = Raxon::Response.new
+      body = {a: 1, b: {c: [2, 3]}}
+      response.body = body
+
+      expect(response.serializable_body).to be(body)
+    end
+
     it "reflects a body an after block rewrote, since it is not memoized" do
       response = Raxon::Response.new
       response.body = serializer_class.new({first: 1})

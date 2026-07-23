@@ -387,7 +387,12 @@ module Raxon
     # its new value.
     def serializable_body
       serializer = Raxon.configuration.body_serializer
-      serializer ? serializer.call(@custom_body) : @custom_body
+
+      if serializer
+        deep_serialize(@custom_body, serializer)
+      else
+        @custom_body
+      end
     end
 
     # Set a response header.
@@ -432,6 +437,44 @@ module Raxon
     def serialized_custom_body
       data = serializable_body
       data.is_a?(String) ? data : JSON.generate(data)
+    end
+
+    # Apply the body serializer to a value and, where the result is a Hash or
+    # Array, to each of its elements — so a serializer object nested anywhere in
+    # the body (a resource under a key, an array of them, one returned from
+    # another serializer's field) is coerced, not just the top-level body. The
+    # serializer sees every node, so it must return anything it does not
+    # recognize unchanged; the common plain string/number leaf is a cheap no-op.
+    #
+    # Containers are rebuilt only when a descendant actually changed, so a body
+    # that carries no serializer objects is traversed but not reallocated.
+    def deep_serialize(value, serializer)
+      coerced = serializer.call(value)
+
+      case coerced
+      when Hash
+        result = coerced
+        coerced.each do |key, element|
+          serialized = deep_serialize(element, serializer)
+          next if serialized.equal?(element)
+
+          result = coerced.dup if result.equal?(coerced)
+          result[key] = serialized
+        end
+        result
+      when Array
+        result = coerced
+        coerced.each_with_index do |element, index|
+          serialized = deep_serialize(element, serializer)
+          next if serialized.equal?(element)
+
+          result = coerced.dup if result.equal?(coerced)
+          result[index] = serialized
+        end
+        result
+      else
+        coerced
+      end
     end
 
     def quote_etag(value)
