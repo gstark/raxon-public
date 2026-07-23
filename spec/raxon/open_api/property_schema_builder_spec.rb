@@ -82,6 +82,26 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder do
     end
   end
 
+  # `of:` naming a component is a $ref to an object schema. It used to fall
+  # through to the else branch and type the items as strings, so every correct
+  # array-of-objects body was rejected with "must be a string".
+  describe "arrays whose items are a component reference" do
+    it "accepts objects and still requires an array" do
+      schema = schema_for(:widgets, property(type: "array", of: "Widget"))
+
+      expect(schema.call(widgets: [{id: 1}, {id: 2}]).success?).to be true
+      expect(schema.call(widgets: []).success?).to be true
+      expect(schema.call(widgets: "nope").success?).to be false
+    end
+
+    it "still constrains items when of: names a scalar type" do
+      schema = schema_for(:ids, property(type: "array", of: "integer"))
+
+      expect(schema.call(ids: [1, 2]).success?).to be true
+      expect(schema.call(ids: [{id: 1}]).success?).to be false
+    end
+  end
+
   # An untyped property emits no `type` key (M-1), i.e. "any type". It used to
   # fall through dry_schema_type's else branch to :string, so the document said
   # "any" while the runtime silently demanded a string — the confusing-500 shape

@@ -211,8 +211,19 @@ module Raxon
         field.properties.any? && (field.of.nil? || field.of.to_s == "object")
       end
 
+      # Item types `of:` can name. Anything else is a component reference — a
+      # `$ref` in the emitted document — and must not be validated as a scalar.
+      SCALAR_ITEM_TYPES = %w[string number integer boolean datetime date_time date Dayjs uuid email].freeze
+
       def array_scalar_item_type(field)
         return nil unless field.of
+
+        # `of: "Widget"` describes an array of objects. Falling through to
+        # dry_schema_type's else branch typed those items as *strings*, so a
+        # correct array-of-objects body was rejected with "must be a string" —
+        # the array is still validated as an array, just without a per-item
+        # constraint the reference cannot supply here.
+        return nil unless SCALAR_ITEM_TYPES.include?(field.of.to_s)
 
         type = dry_schema_type(field.of.to_s)
         return nil if type == :hash
