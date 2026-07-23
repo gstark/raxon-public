@@ -271,7 +271,10 @@ module Raxon
       schema = @handler_endpoint.response_schemas[status_code]
       return unless schema
 
-      result = schema.call(response.body)
+      # Validate the coerced data, not the raw body: a handler may have returned a
+      # serializer object that config.body_serializer turns into the hash/array
+      # the schema describes.
+      result = schema.call(response.serializable_body)
       return if result.success?
 
       handle_response_validation_failure(response, status_code, result.errors.to_h, validation_mode)

@@ -156,6 +156,48 @@ RSpec.describe Raxon::EndpointInvocation do
       expect(response.status_code).to eq(422)
       expect(response.body).to eq(error: "bad input")
     end
+
+    # config.body_serializer runs before validation, so a handler that returns a
+    # serializer object is validated against the data it becomes, not the object.
+    it "validates the serialized form of a returned serializer object" do
+      serializer = Struct.new(:data) do
+        def serializable_hash = data
+      end
+      Raxon.configure { |c| c.body_serializer = ->(b) { b.is_a?(serializer) ? b.serializable_hash : b } }
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| serializer.new({id: 7}) }
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(200)
+      expect(response.serializable_body).to eq(id: 7)
+    ensure
+      Raxon.configuration.body_serializer = nil
+    end
+
+    it "flags a returned serializer whose data violates the schema" do
+      serializer = Struct.new(:data) do
+        def serializable_hash = data
+      end
+      Raxon.configure { |c| c.body_serializer = ->(b) { b.is_a?(serializer) ? b.serializable_hash : b } }
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| serializer.new({wrong: "field"}) }
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+    ensure
+      Raxon.configuration.body_serializer = nil
+    end
   end
 
   describe "lifecycle ordering across a hierarchy" do

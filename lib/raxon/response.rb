@@ -379,6 +379,17 @@ module Raxon
       [@status, @headers, @custom_body ? [serialized_custom_body] : []]
     end
 
+    # The response body coerced to JSON-ready data by config.body_serializer.
+    # Both response validation and JSON encoding read the body through here, so a
+    # handler can return a serializer object and have it become data in one place.
+    # Not memoized: response validation is off in production, so this runs once
+    # per response there, and an after block that rewrites the body still encodes
+    # its new value.
+    def serializable_body
+      serializer = Raxon.configuration.body_serializer
+      serializer ? serializer.call(@custom_body) : @custom_body
+    end
+
     # Set a response header.
     # Delegates to Rack::Response#[]=
     #
@@ -419,7 +430,8 @@ module Raxon
     end
 
     def serialized_custom_body
-      @custom_body.is_a?(String) ? @custom_body : JSON.generate(@custom_body)
+      data = serializable_body
+      data.is_a?(String) ? data : JSON.generate(data)
     end
 
     def quote_etag(value)

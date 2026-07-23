@@ -6,7 +6,7 @@ module Raxon
     # can read into memory. Applications that accept larger uploads should raise
     # max_request_body_size; set it to nil to disable the check entirely.
     DEFAULT_MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trusted_proxies, :max_request_body_size, :logger, :schema_adapter, :regexp_timeout, :wrap_error_handler, :path_parameter_defaults, :validation_error_profiles
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trusted_proxies, :max_request_body_size, :logger, :schema_adapter, :regexp_timeout, :wrap_error_handler, :path_parameter_defaults, :validation_error_profiles, :body_serializer
     alias_method :routes_directories, :routes_directory
     alias_method :routes_directories=, :routes_directory=
 
@@ -104,6 +104,21 @@ module Raxon
       # Sequel). Set to any object implementing the adapter interface described
       # in OpenApi::SchemaIntrospection to use a custom source.
       @schema_adapter = nil
+      # Converts a response body into JSON-ready data (a Hash, Array, String, or
+      # other primitive) before Raxon validates and encodes it. A handler can
+      # then return a serializer object directly instead of calling its
+      # to-hash method at every call site.
+      #
+      #   config.body_serializer = ->(body) {
+      #     body.is_a?(Alba::Resource) ? body.serializable_hash : body
+      #   }
+      #
+      # It runs on the top-level body only (a returned serializer, or one passed
+      # to response.ok / Raxon::Outcome), not on serializer objects nested inside
+      # a plain Hash — serialize those where they sit. It receives every body,
+      # including nil and already-plain hashes, so it must return anything it does
+      # not recognize unchanged. nil (default) leaves the body untouched.
+      @body_serializer = nil
     end
 
     # Register a named request-validation HTTP contract. Route ancestors opt

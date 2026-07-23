@@ -441,6 +441,74 @@ RSpec.describe Raxon::Response do
     end
   end
 
+  describe "config.body_serializer" do
+    # A stand-in for an Alba resource: an object that knows how to turn itself
+    # into JSON-ready data.
+    let(:serializer_class) do
+      Struct.new(:data) do
+        def serializable_hash = data
+      end
+    end
+
+    # A before hook, not around: spec_helper resets configuration in its own
+    # before(:each), which runs after around hooks open and would wipe this.
+    before do
+      klass = serializer_class
+      Raxon.configuration.body_serializer = ->(body) {
+        body.is_a?(klass) ? body.serializable_hash : body
+      }
+    end
+
+    it "encodes a returned serializer object as its data" do
+      response = Raxon::Response.new
+      response.body = serializer_class.new({id: 7, name: "Ada"})
+
+      _status, _headers, body = response.to_rack
+
+      expect(body.first).to eq('{"id":7,"name":"Ada"}')
+    end
+
+    it "encodes a collection serializer as an array" do
+      response = Raxon::Response.new
+      response.body = serializer_class.new([{id: 1}, {id: 2}])
+
+      _status, _headers, body = response.to_rack
+
+      expect(body.first).to eq('[{"id":1},{"id":2}]')
+    end
+
+    it "exposes the coerced data through #serializable_body for validation" do
+      response = Raxon::Response.new
+      response.body = serializer_class.new({id: 7})
+
+      expect(response.serializable_body).to eq({id: 7})
+    end
+
+    it "leaves a plain hash body untouched" do
+      response = Raxon::Response.new
+      response.body = {plain: true}
+
+      expect(response.serializable_body).to eq({plain: true})
+    end
+
+    it "reflects a body an after block rewrote, since it is not memoized" do
+      response = Raxon::Response.new
+      response.body = serializer_class.new({first: 1})
+      expect(response.serializable_body).to eq({first: 1})
+
+      response.body = serializer_class.new({second: 2})
+      expect(response.serializable_body).to eq({second: 2})
+    end
+
+    it "is identity when no serializer is configured" do
+      Raxon.configuration.body_serializer = nil
+      response = Raxon::Response.new
+      response.body = {untouched: true}
+
+      expect(response.serializable_body).to eq({untouched: true})
+    end
+  end
+
   describe "#to_rack" do
     it "converts to Rack response array" do
       response = Raxon::Response.new
