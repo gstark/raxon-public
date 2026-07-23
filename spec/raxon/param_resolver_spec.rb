@@ -219,7 +219,10 @@ end
 
 RSpec.describe Raxon::ParamResolver, "unrecognized in: locations" do
   it "falls back to the merged params for locations it does not isolate" do
-    parameter = Raxon::OpenApi::Parameter.new(:payload, type: :string, in: :body)
+    # Raxon::OpenApi::Parameter rejects non-OpenAPI locations, so use a bare
+    # duck-typed parameter to exercise the resolver's defensive fallback branch
+    # directly.
+    parameter = Struct.new(:name, :in).new(:payload, :body)
     echo_schema = double("schema")
     allow(echo_schema).to receive(:call) { |params| double("result", success?: true, to_h: params) }
     resolver = described_class.new(parameters: [parameter], schema: echo_schema)
@@ -230,5 +233,33 @@ RSpec.describe Raxon::ParamResolver, "unrecognized in: locations" do
     )
 
     expect(resolver.resolve(sources).params[:payload]).to eq("from-body")
+  end
+
+  describe described_class::Sources do
+    # Request hands itself over as +deferred+ rather than materializing headers
+    # and cookies, which most endpoints never read.
+    it "reads headers and cookies from the deferred source on first use" do
+      deferred = double("request", headers: {"HTTP_X_TOKEN" => "abc"}, cookies: {"session" => "xyz"})
+      sources = described_class.new(query: {a: 1}, deferred: deferred)
+
+      expect(sources.headers).to eq("HTTP_X_TOKEN" => "abc")
+      expect(sources.cookies).to eq("session" => "xyz")
+    end
+
+    # The double stubs nothing, so consulting it at all raises rather than
+    # quietly returning the wrong source.
+    it "prefers values passed directly over the deferred source" do
+      sources = described_class.new(headers: {"HTTP_X" => "direct"}, cookies: {}, deferred: double("request"))
+
+      expect(sources.headers).to eq("HTTP_X" => "direct")
+      expect(sources.cookies).to eq({})
+    end
+
+    it "defaults headers and cookies to empty with neither values nor a deferred source" do
+      sources = described_class.new(query: {a: 1})
+
+      expect(sources.headers).to eq({})
+      expect(sources.cookies).to eq({})
+    end
   end
 end

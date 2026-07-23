@@ -117,6 +117,61 @@ RSpec.describe Raxon::GenerateCommand do
     }.to raise_error(SystemExit) { |error| expect(error.status).to eq(1) }
   end
 
+  it "rejects a traversal segment without writing anything" do
+    in_tmpdir do
+      expect {
+        expect { described_class.new("route", ["../../etc/evil", "get"]).execute }
+          .to output(/Invalid route segment ".."/).to_stdout
+      }.to raise_error(SystemExit) { |error| expect(error.status).to eq(1) }
+
+      expect(File.exist?("../../etc/evil/get.rb")).to be(false)
+    end
+  end
+
+  it "rejects a segment carrying Ruby interpolation" do
+    in_tmpdir do
+      # Literal characters #{...}; escaped so it is not interpolated in this spec.
+      payload = "safe\#{Kernel.system(\"id\")}"
+
+      expect {
+        expect { described_class.new("route", [payload, "get"]).execute }
+          .to output(/Invalid route segment/).to_stdout
+      }.to raise_error(SystemExit) { |error| expect(error.status).to eq(1) }
+
+      expect(Dir.glob("routes/**/*.rb")).to be_empty
+    end
+  end
+
+  it "refuses a route dir that resolves outside the routes directory" do
+    in_tmpdir do
+      command = described_class.new("route", ["x", "get"])
+
+      expect {
+        expect { command.send(:ensure_within_routes!, "/etc/evil") }
+          .to output(/Refusing to generate outside/).to_stdout
+      }.to raise_error(SystemExit) { |error| expect(error.status).to eq(1) }
+    end
+  end
+
+  it "allows a leading-dot segment like .well-known" do
+    in_tmpdir do
+      suppress_output { described_class.new("route", [".well-known/health", "get"]).execute }
+
+      expect(File.exist?("routes/.well-known/health/get.rb")).to be(true)
+    end
+  end
+
+  it "serializes generated string literals so a value cannot break out" do
+    in_tmpdir do
+      # An awkward-but-allowed segment with a dot; #dump keeps the description a
+      # single well-formed string literal.
+      suppress_output { described_class.new("route", ["a.b", "get"]).execute }
+
+      content = File.read("routes/a.b/get.rb")
+      expect(content).to include('endpoint.description "TODO: describe GET /a.b"')
+    end
+  end
+
   it "generates a loadable route file" do
     in_tmpdir do |dir|
       suppress_output { described_class.new("route", ["api/v1/things/__id__", "get"]).execute }

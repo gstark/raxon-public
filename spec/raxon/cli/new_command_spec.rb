@@ -167,6 +167,40 @@ RSpec.describe Raxon::NewCommand do
         suppress_output { command_with_skip.execute }
       end
 
+      it "still writes .gitignore when skip_git option is true" do
+        command_with_skip = described_class.new(project_path, {skip_git: true, skip_bundle: true})
+
+        suppress_output { command_with_skip.execute }
+
+        expect(File.read(File.join(project_path, ".gitignore"))).to include("/.bundle/")
+      end
+
+      it "creates AGENTS.md documenting the verify loop" do
+        allow(command).to receive(:system)
+
+        suppress_output { command.execute }
+
+        content = File.read(File.join(project_path, "AGENTS.md"))
+        expect(content).to include("bundle exec raxon routes")
+        expect(content).to include("bundle exec rake raxon:openapi:generate")
+        expect(content).to include("bundle exec rspec")
+      end
+
+      it "creates a runnable spec suite" do
+        allow(command).to receive(:system)
+
+        suppress_output { command.execute }
+
+        expect(File.read(File.join(project_path, ".rspec"))).to include("--require spec_helper")
+
+        spec_helper = File.read(File.join(project_path, "spec/spec_helper.rb"))
+        expect(spec_helper).to include("require \"raxon/test/rspec\"")
+        expect(spec_helper).to include("Raxon::Test::Methods")
+
+        expect(File.read(File.join(project_path, "spec/health_spec.rb")))
+          .to include("conform_to_response_schema(200)")
+      end
+
       it "skips bundle install when skip_bundle option is true" do
         command_with_skip = described_class.new(project_path, {skip_git: true, skip_bundle: true})
 

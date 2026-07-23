@@ -64,6 +64,27 @@ RSpec.describe Raxon::RoutesCommand do
       end
     end
 
+    context "when config.ru raises a Raxon::Error" do
+      around do |example|
+        Dir.mktmpdir do |dir|
+          Dir.chdir(dir) do
+            File.write("config.ru", "raise Raxon::Error, 'Invalid HTTP method in filename: before.rb'")
+            FileUtils.mkdir_p("routes")
+
+            example.run
+          end
+        end
+      end
+
+      it "surfaces the message and exits instead of falling back to defaults" do
+        expect(Raxon::RoutesFormatter).not_to receive(:display)
+
+        expect { command.execute }
+          .to output(/Error: Invalid HTTP method in filename: before\.rb/).to_stdout
+          .and raise_error(SystemExit) { |error| expect(error.status).to eq(1) }
+      end
+    end
+
     context "when config.ru does not exist" do
       around do |example|
         Dir.mktmpdir do |dir|

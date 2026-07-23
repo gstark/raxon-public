@@ -29,6 +29,14 @@ RSpec.describe Raxon::ParameterFilter do
 
       expect(regexp_filter.filter(card_number: "4111", account: "a")).to eq(card_number: "[FILTERED]", account: "a")
     end
+
+    it "recompiles Regexp filters with a per-match timeout, preserving flags" do
+      filter = described_class.new([/\Acard_/i], regexp_timeout: 0.5)
+      compiled = filter.instance_variable_get(:@regexp_filters).first
+
+      expect(compiled.timeout).to eq(0.5)
+      expect(compiled.options & Regexp::IGNORECASE).to eq(Regexp::IGNORECASE)
+    end
   end
 
   describe "#filter_headers" do

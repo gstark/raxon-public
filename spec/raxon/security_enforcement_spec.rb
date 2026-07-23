@@ -146,12 +146,15 @@ RSpec.describe "Security scheme enforcement" do
       expect(status).to eq(200)
     end
 
-    it "does not enforce security referencing an undefined scheme" do
+    it "fails closed when a requirement references an undeclared scheme" do
+      # An undeclared scheme name is almost always a typo or a load-order
+      # mistake; the endpoint was meant to be protected, so deny rather than
+      # silently admit the request.
       define_secure_route(:undeclared)
 
       status, = call("/secure")
 
-      expect(status).to eq(200)
+      expect(status).to eq(401)
     end
 
     it "skips requirements mixing in documentation-only schemes" do
@@ -164,6 +167,17 @@ RSpec.describe "Security scheme enforcement" do
       status, = call("/secure")
 
       expect(status).to eq(401)
+    end
+
+    # An explicitly empty requirements array declares "no security", which is
+    # distinct from declaring none at all: the endpoint takes the code path that
+    # inspects requirements and has to find nothing to enforce.
+    it "grants access when the endpoint declares an empty requirements array" do
+      define_secure_route([])
+
+      status, = call("/secure")
+
+      expect(status).to eq(200)
     end
   end
 end

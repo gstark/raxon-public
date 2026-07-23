@@ -455,6 +455,118 @@ RSpec.describe Raxon::Request, "request_body validation" do
       expect(request.validation_errors).to have_key(:photo)
     end
 
+    it "answers 413 through the router when an upload exceeds max_size" do
+      # End-to-end: the size violation is raised from inside validation, and
+      # must reach the router's 413 path rather than an app exception handler
+      # or a 500.
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :multipart, required: true do |body|
+        body.property :photo, type: :file, required: true, max_size: 5
+      end
+      endpoint.response(200, type: :object) { |r| r.property :ok, type: :boolean }
+      endpoint.handler { |request, response, _m| response.ok ok: true }
+
+      tempfile = Tempfile.new("upload")
+      tempfile.write("a" * 100)
+      tempfile.rewind
+      file_hash = {tempfile: tempfile, filename: "photo.jpg", type: "image/jpeg"}
+
+      allow(Rack::Request).to receive(:new).and_wrap_original do |original, env|
+        original.call(env).tap do |rack_request|
+          allow(rack_request).to receive(:params).and_return({"photo" => file_hash})
+        end
+      end
+
+      Raxon::RouteLoader.routes.register("POST", "/upload", endpoint)
+      status, _, _ = Raxon::Router.new.call(
+        Rack::MockRequest.env_for("/upload", :method => "POST", "CONTENT_TYPE" => "multipart/form-data")
+      )
+
+      expect(status).to eq(413)
+
+      tempfile.close!
+    end
+
+    it "answers 422 through the router when an upload's extension is rejected" do
+      # End-to-end: a well-formed request carrying content the endpoint refuses
+      # is 422, distinct from the 400 a malformed request gets and the 413 an
+      # oversized one gets.
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :multipart, required: true do |body|
+        body.property :photo, type: :file, required: true, allowed_extensions: %w[jpg]
+      end
+      endpoint.response(201, type: :object) { |r| r.property :ok, type: :boolean }
+      endpoint.handler { |_request, response, _m| response.created ok: true }
+
+      tempfile = Tempfile.new("upload")
+      file_hash = {tempfile: tempfile, filename: "shell.php", type: "image/jpeg"}
+
+      allow(Rack::Request).to receive(:new).and_wrap_original do |original, env|
+        original.call(env).tap do |rack_request|
+          allow(rack_request).to receive(:params).and_return({"photo" => file_hash})
+        end
+      end
+
+      Raxon::RouteLoader.routes.register("POST", "/photos", endpoint)
+      status, _, body = Raxon::Router.new.call(
+        Rack::MockRequest.env_for("/photos", :method => "POST", "CONTENT_TYPE" => "multipart/form-data")
+      )
+
+      expect(status).to eq(422)
+      expect(JSON.parse(body.first)["details"]).to include("photo")
+
+      tempfile.close!
+    end
+
+    it "reports both a malformed field and a rejected upload, choosing 422" do
+      # Errors stay merged regardless of status, so a request with two different
+      # problems reports both rather than hiding one behind the other.
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :multipart, required: true do |body|
+        body.property :photo, type: :file, required: true, allowed_extensions: %w[jpg]
+        body.property :title, type: :string, required: true
+      end
+
+      tempfile = Tempfile.new("upload")
+      file_hash = {tempfile: tempfile, filename: "shell.php", type: "image/jpeg"}
+
+      rack_env = Rack::MockRequest.env_for("/test", :method => "POST", "CONTENT_TYPE" => "multipart/form-data")
+      rack_request = Rack::Request.new(rack_env)
+      allow(rack_request).to receive(:params).and_return({"photo" => file_hash})
+      request = Raxon::Request.new(rack_request, endpoint)
+
+      request.params
+      expect(request.validation_errors[:title]).to eq(["is missing"])
+      expect(request.validation_errors[:photo]).to eq(["must be one of the allowed file types: jpg"])
+      expect(request.validation_unprocessable?).to be(true)
+
+      tempfile.close!
+    end
+
+    it "reports a disallowed extension as an ordinary validation error" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :multipart, required: true do |body|
+        body.property :photo, type: :file, required: true, allowed_extensions: %w[jpg]
+      end
+
+      tempfile = Tempfile.new("upload")
+      file_hash = {tempfile: tempfile, filename: "shell.php", type: "image/jpeg"}
+
+      rack_env = Rack::MockRequest.env_for(
+        "/test",
+        :method => "POST",
+        "CONTENT_TYPE" => "multipart/form-data"
+      )
+      rack_request = Rack::Request.new(rack_env)
+      allow(rack_request).to receive(:params).and_return({"photo" => file_hash})
+      request = Raxon::Request.new(rack_request, endpoint)
+
+      request.params
+      expect(request.validation_errors[:photo]).to eq(["must be one of the allowed file types: jpg"])
+
+      tempfile.close!
+    end
+
     it "does not wrap non-Hash file params" do
       endpoint = Raxon::OpenApi::Endpoint.new
       endpoint.request_body type: :object, required: true do |body|

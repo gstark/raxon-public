@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "deferred_enum"
+require_relative "schema_options"
 require_relative "strict_options"
 
 module Raxon
@@ -9,6 +10,10 @@ module Raxon
     #
     # Parameters can be located in different parts of the request (path, query,
     # header, etc.) and have various types and validation rules.
+    #
+    # Most of its options are shared with {Property} via {SchemaOptions}; only
+    # +type+, +description+, +required+, plus the parameter-specific +name+ and
+    # +in+, are declared here.
     #
     # @example Path parameter
     #   Parameter.new(:id, type: :string, in: :path, description: "Resource ID")
@@ -28,6 +33,10 @@ module Raxon
       include PropertyContainer
       include DeferredEnum
       include StrictOptions
+      include SchemaOptions
+
+      # Valid OpenAPI parameter locations.
+      LOCATIONS = %i[query header path cookie].freeze
 
       # @!attribute [r] name
       #   @return [Symbol, String] The parameter name
@@ -43,87 +52,11 @@ module Raxon
 
       # @!attribute [r] type
       #   @return [String] The parameter type, automatically processed
-      option :type, proc { |value| OpenApi::DSL.process_type(value) }
+      option :type, proc { |value| OpenApi::TypeSystem.process_type_option(value) }
 
       # @!attribute [r] description
       #   @return [String, nil] Parameter description
       option :description, optional: true
-
-      # @!attribute [r] as
-      #   @return [Symbol, String, nil] Reference to a component schema
-      option :as, optional: true
-
-      # @!attribute [r] of
-      #   @return [Symbol, String, nil] For array types, the type of array elements
-      option :of, optional: true
-
-      # @!attribute [r] enum
-      #   @return [Array, nil] List of allowed values, surfaced in the generated
-      #     OpenAPI schema. May be supplied as a callable (e.g. a lambda), which
-      #     is stored unevaluated and resolved on every read — see {DeferredEnum}.
-      option :enum, optional: true
-
-      # @!attribute [r] allowable_values
-      #   @return [Array, nil] Alias for enum - list of allowed values. May also
-      #     be supplied as a callable resolved lazily — see {DeferredEnum}.
-      option :allowable_values, optional: true
-
-      # @!attribute [r] nullable
-      #   @return [Boolean] Whether the parameter can be null (default: false)
-      option :nullable, default: proc { false }
-
-      # @!attribute [r] format
-      #   @return [String, Symbol, nil] OpenAPI string format
-      option :format, optional: true
-
-      # @!attribute [r] example
-      #   @return [Object, nil] OpenAPI example value
-      option :example, optional: true
-
-      # @!attribute [r] default
-      #   @return [Object, nil] OpenAPI default value
-      option :default, optional: true
-
-      # @!attribute [r] minimum
-      #   @return [Numeric, nil] Minimum numeric value
-      option :minimum, optional: true
-
-      # @!attribute [r] maximum
-      #   @return [Numeric, nil] Maximum numeric value
-      option :maximum, optional: true
-
-      # @!attribute [r] min_length
-      #   @return [Integer, nil] Minimum string length
-      option :min_length, optional: true
-
-      # @!attribute [r] max_length
-      #   @return [Integer, nil] Maximum string length
-      option :max_length, optional: true
-
-      # @!attribute [r] pattern
-      #   @return [String, Regexp, nil] String pattern constraint
-      option :pattern, optional: true
-
-      # @!attribute [r] min_items
-      #   @return [Integer, nil] Minimum array item count
-      option :min_items, optional: true
-
-      # @!attribute [r] max_items
-      #   @return [Integer, nil] Maximum array item count
-      option :max_items, optional: true
-
-      # @!attribute [r] unique_items
-      #   @return [Boolean, nil] Whether array items must be unique
-      option :unique_items, optional: true
-
-      # @!attribute [r] extensions
-      #   @return [Hash] OpenAPI specification extensions merged into the emitted
-      #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
-      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
-
-      # @!attribute [r] properties
-      #   @return [Hash] Hash of nested property definitions for body/object parameters
-      option :properties, default: proc { {} }
 
       # Construct a parameter, rejecting any unknown option (see {StrictOptions}).
       #
@@ -132,21 +65,61 @@ module Raxon
       # @raise [ArgumentError] when an unsupported option is supplied
       def initialize(name, **options)
         reject_unknown_options!(options)
+        validate_location!(options[:in])
+        validate_body_only_type!(name, options[:type])
         super
       end
 
-      # Resolve a deferred (callable) +enum+ lazily on read. See {DeferredEnum}.
-      # @return [Array, nil]
-      def enum
-        resolve_deferred_enum(super)
-      end
+      # Types that only mean something in a request body. A parameter is
+      # serialized into a URL, header, or cookie, and OpenAPI defines no
+      # serialization for binary data in any of those places — so `type: :file`
+      # on a parameter cannot be described in the generated document no matter
+      # what the runtime does with it.
+      BODY_ONLY_TYPES = %i[file multipart].freeze
 
-      # Resolve a deferred (callable) +allowable_values+ lazily on read.
-      # See {DeferredEnum}.
-      # @return [Array, nil]
-      def allowable_values
-        resolve_deferred_enum(super)
+      # Reject a body-only type on a parameter.
+      #
+      # Without this the declaration half-works, which is worse than either
+      # extreme: an `in: :query` parameter is validated against the lenient
+      # source merge (see ParamResolver#assemble_validation), which includes
+      # form params, so a real multipart upload does reach it — but neither
+      # FileUploadValidator nor RequestBodyCoercer consults parameters, so the
+      # handler receives the raw Rack hash instead of the documented
+      # Raxon::UploadedFile, and a non-file value passes validation entirely.
+      #
+      # @param name [Symbol, String] the parameter name, for the message
+      # @param type [Symbol, String, Array, nil]
+      # @raise [Error] when the type is body-only
+      # @return [void]
+      def validate_body_only_type!(name, type)
+        offending = Array(type).find { |member| BODY_ONLY_TYPES.include?(member.to_s.to_sym) }
+        return if offending.nil?
+
+        raise Error,
+          "type: #{offending.to_sym.inspect} is not valid for a parameter (#{name}). " \
+          "Declare uploads in the request body:\n" \
+          "  endpoint.body type: :multipart do |body|\n" \
+          "    body.property :#{name}, type: :file\n" \
+          "  end"
       end
+      private :validate_body_only_type!
+
+      # Reject an unknown +in:+ location. A typo (e.g. +in: :qeury+) otherwise
+      # produces an invalid OpenAPI document and a parameter that is never
+      # sourced at runtime — a silent failure.
+      #
+      # @param location [Symbol, String, nil]
+      # @raise [ArgumentError] when the location is not a valid OpenAPI location
+      # @return [void]
+      def validate_location!(location)
+        return if location.nil?
+        return if LOCATIONS.include?(location.to_sym)
+
+        raise ArgumentError,
+          "invalid `in:` location for #{self.class}: #{location.inspect}. " \
+          "Valid locations: #{LOCATIONS.join(", ")}."
+      end
+      private :validate_location!
     end
   end
 end

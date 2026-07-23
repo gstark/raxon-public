@@ -44,6 +44,11 @@ RSpec.describe Raxon::Configuration do
       expect(config.helpers_path).to be_nil
     end
 
+    it "defaults regexp_timeout to 1.0 second" do
+      config = Raxon::Configuration.new
+      expect(config.regexp_timeout).to eq(1.0)
+    end
+
     it "sets root to nil by default" do
       config = Raxon::Configuration.new
       expect(config.root).to be_nil
@@ -54,14 +59,21 @@ RSpec.describe Raxon::Configuration do
       expect(config.rails_compatible_instrumentation).to eq(false)
     end
 
-    it "uses error response validation with details outside production by default" do
+    it "leaves response validation off by default, with details exposed outside production" do
       config = Raxon::Configuration.new
 
-      expect(config.response_validation).to eq(:error_response)
+      expect(config.response_validation).to be(false)
       expect(config.expose_validation_details).to be(true)
     end
 
-    it "uses log response validation without details in production by default" do
+    it "opts in to response validation through configuration" do
+      config = Raxon::Configuration.new
+      config.response_validation = :error_response
+
+      expect(config.response_validation).to eq(:error_response)
+    end
+
+    it "leaves response validation off without details in production by default" do
       original_raxon_env = ENV["RAXON_ENV"]
       original_rack_env = ENV["RACK_ENV"]
       ENV["RAXON_ENV"] = "production"
@@ -69,7 +81,7 @@ RSpec.describe Raxon::Configuration do
 
       config = Raxon::Configuration.new
 
-      expect(config.response_validation).to eq(:log)
+      expect(config.response_validation).to be(false)
       expect(config.expose_validation_details).to be(false)
     ensure
       ENV["RAXON_ENV"] = original_raxon_env
@@ -108,7 +120,7 @@ RSpec.describe Raxon::Configuration do
   describe "Raxon.configure" do
     before do
       # Reset configuration before each test
-      Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
+      Raxon.reset_configuration!
     end
 
     it "allows configuring on_error via configure block" do
@@ -135,7 +147,7 @@ RSpec.describe Raxon::Configuration do
 
   describe "Raxon.root" do
     before do
-      Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
+      Raxon.reset_configuration!
     end
 
     it "raises an error when root is not configured" do

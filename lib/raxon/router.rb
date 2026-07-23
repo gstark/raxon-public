@@ -40,6 +40,12 @@ module Raxon
       # routes beforehand are unaffected.
       Raxon::RouteLoader.load!
       @route_reloader = Raxon::RouteReloader.new if Raxon.configuration.reload_routes?
+      # Read once rather than per #debug_log call. ENV[] is a getenv, and the
+      # lifecycle logging calls debug_log on every request whether or not it is
+      # enabled, which cost ~0.24us of a ~7us plaintext response. The tradeoff
+      # is that RAXON_DEBUG has to be set before the router is built, which is
+      # how it was already used: the server builds one router at boot.
+      @debug = !ENV["RAXON_DEBUG"].nil?
     end
 
     # Rack application entry point.
@@ -53,7 +59,14 @@ module Raxon
 
       return payload_too_large_response if request_body_too_large?(rack_request)
 
-      route_data = Raxon::RouteLoader.routes.find(rack_request.request_method, rack_request.path)
+      apply_body_size_limit(env)
+
+      # Read the registry once. Under hot reloading a reload can publish a new
+      # one between the lookup and the allowed-methods check below, and
+      # answering a single request from two generations would be incoherent.
+      routes = Raxon::RouteLoader.routes
+      path = request_path(rack_request)
+      route_data = routes.find(rack_request.request_method, path)
 
       if route_data.nil?
         # Try catchall endpoint first
@@ -70,7 +83,7 @@ module Raxon
           return result
         end
 
-        allowed = Raxon::RouteLoader.routes.allowed_methods(rack_request.path)
+        allowed = routes.allowed_methods(path)
         if allowed.any?
           if rack_request.request_method == "OPTIONS"
             debug_log { "[Raxon] Automatic OPTIONS response for #{rack_request.path}: #{allowed.join(", ")}" }
@@ -94,8 +107,9 @@ module Raxon
 
       endpoint = route_data[:endpoint]
       endpoints = route_data[:endpoints]
+      effective_endpoint = route_data[:effective_endpoint] || endpoint
 
-      wrapper_request = Raxon::Request.new(rack_request, endpoint)
+      wrapper_request = Raxon::Request.new(rack_request, effective_endpoint)
       wrapper_response = Raxon::Response.new(endpoint)
       wrapper_response.request = wrapper_request
 
@@ -104,11 +118,15 @@ module Raxon
       env["raxon.response"] = wrapper_response
 
       begin
-        execute_request(wrapper_request, wrapper_response, endpoint, endpoints)
+        execute_request(wrapper_request, wrapper_response, effective_endpoint, endpoints)
       rescue Raxon::HaltException => e
         # HaltException carries the response - use it instead of wrapper_response
         # This allows halt to be called with a custom response
         wrapper_response = e.response
+      rescue Raxon::RequestBodyTooLarge
+        return payload_too_large_response
+      rescue Rack::BadRequest => e
+        return malformed_request_response(e)
       end
 
       rack_response = wrapper_response.to_rack
@@ -120,9 +138,25 @@ module Raxon
     private
 
     def debug_log
-      return unless ENV["RAXON_DEBUG"]
+      return unless @debug
 
       warn yield
+    end
+
+    # The path to route on.
+    #
+    # Rack::Request#path builds script_name + path_info, allocating a string per
+    # request to describe a path the env already holds. Mounted under a prefix
+    # that concatenation is the whole point, so it still happens; unmounted —
+    # every standalone Raxon app — PATH_INFO already is the path.
+    #
+    # @param rack_request [Rack::Request]
+    # @return [String]
+    def request_path(rack_request)
+      script_name = rack_request.script_name
+      return rack_request.path_info if script_name.nil? || script_name.empty?
+
+      rack_request.path
     end
 
     # Executes a request with global before/after/around blocks wrapping the route hierarchy.
@@ -163,6 +197,10 @@ module Raxon
       yield
     rescue Raxon::HaltException
       raise # Let HaltException propagate (flow control)
+    rescue Raxon::RequestBodyTooLarge
+      raise # Always a 413 (see Router#call); never a user-handled error
+    rescue Rack::BadRequest
+      raise # A malformed request is a 400/413 (see Router#call), not an app error
     rescue => exception
       handler = find_exception_handler(exception, config.exception_handlers)
       raise unless handler # Propagate to ErrorHandler middleware
@@ -225,6 +263,10 @@ module Raxon
         execute_request(wrapper_request, wrapper_response, endpoint, [endpoint])
       rescue Raxon::HaltException => e
         wrapper_response = e.response
+      rescue Raxon::RequestBodyTooLarge
+        return payload_too_large_response
+      rescue Rack::BadRequest => e
+        return malformed_request_response(e)
       end
 
       rack_response = wrapper_response.to_rack
@@ -298,7 +340,31 @@ module Raxon
       content_length = rack_request.get_header("CONTENT_LENGTH")
       return false if content_length.nil? || content_length.empty?
 
-      content_length.to_i > max
+      # Parse strictly: String#to_i would read "999999999garbage" as a valid
+      # length and silently truncate, letting a lie about Content-Length slip
+      # past the guard. A header that does not parse as a non-negative integer
+      # is itself malformed, so reject it when a limit is in force.
+      parsed = begin
+        Integer(content_length, 10)
+      rescue ArgumentError, TypeError
+        return true
+      end
+
+      parsed.negative? || parsed > max
+    end
+
+    # Wrap the Rack input in a size-enforcing stream so an over-limit body is
+    # rejected mid-read even when Content-Length lies or is absent (chunked
+    # transfer). The early Content-Length check above is the cheap first pass;
+    # this is the one that cannot be evaded. No-op when no limit is configured.
+    def apply_body_size_limit(env)
+      max = Raxon.configuration.max_request_body_size
+      return unless max
+
+      input = env["rack.input"]
+      return unless input
+
+      env["rack.input"] = Raxon::LimitedInput.new(input, max)
     end
 
     def payload_too_large_response
@@ -307,6 +373,36 @@ module Raxon
         {"content-type" => "application/json"},
         [%({"error":"Payload Too Large"})]
       ]
+    end
+
+    # Turn a Rack parse/limit failure into a client error response. Multipart
+    # part/size-limit breaches are 413; every other malformed request (bad
+    # encoding, conflicting parameter types, over-nested params, ...) is 400.
+    # Handled here in the router, so these expected client errors become a clean
+    # response instead of a 500 — and never reach the exception-tracking path.
+    #
+    # @param exception [Rack::BadRequest]
+    # @return [Array] Rack response tuple
+    def malformed_request_response(exception)
+      return payload_too_large_response if rack_size_limit_error?(exception)
+
+      [
+        400,
+        {"content-type" => "application/json"},
+        [%({"error":"Bad Request"})]
+      ]
+    end
+
+    # Whether a Rack::BadRequest is a multipart part/size-limit breach (413) as
+    # opposed to a malformed-parse error (400). Guarded with const_defined? so it
+    # stays correct across Rack 3.x point releases.
+    #
+    # @param exception [Rack::BadRequest]
+    # @return [Boolean]
+    def rack_size_limit_error?(exception)
+      %i[MultipartPartLimitError MultipartTotalPartLimitError].any? do |name|
+        Rack::Multipart.const_defined?(name) && exception.is_a?(Rack::Multipart.const_get(name))
+      end
     end
 
     # Find the most specific exception handler for an exception.

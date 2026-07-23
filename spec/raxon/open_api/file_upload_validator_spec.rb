@@ -42,6 +42,117 @@ RSpec.describe Raxon::OpenApi::FileUploadValidator do
     expect(result.errors.to_h[:photo]).to eq(["must be a file upload"])
   end
 
+  describe "declared upload constraints" do
+    def upload(name, bytes)
+      file = Tempfile.new("upload")
+      file.write(bytes)
+      file.rewind
+      @tempfiles << file
+      {tempfile: file, filename: name, type: "application/octet-stream"}
+    end
+
+    before { @tempfiles = [] }
+    after { @tempfiles.each(&:close!) }
+
+    it "answers 413 for a file over its declared max_size" do
+      body = request_body { |b| b.property :photo, type: :file, required: true, max_size: 10 }
+
+      expect {
+        validator_for(body).call({photo: upload("photo.jpg", "a" * 11)})
+      }.to raise_error(Raxon::RequestBodyTooLarge)
+    end
+
+    it "accepts a file at exactly its declared max_size" do
+      body = request_body { |b| b.property :photo, type: :file, required: true, max_size: 10 }
+
+      result = validator_for(body).call({photo: upload("photo.jpg", "a" * 10)})
+
+      expect(result.success?).to be(true)
+    end
+
+    it "answers 413 when the uploads together exceed max_total_size" do
+      # Each file is within its own limit; only the total is too large. This is
+      # the case a per-file cap alone cannot catch.
+      body = Raxon::OpenApi::RequestBody.new(type: :multipart, required: true, max_total_size: 15)
+      body.property :front, type: :file, required: true, max_size: 10
+      body.property :back, type: :file, required: true, max_size: 10
+
+      expect {
+        validator_for(body).call({front: upload("f.jpg", "a" * 9), back: upload("b.jpg", "a" * 9)})
+      }.to raise_error(Raxon::RequestBodyTooLarge)
+    end
+
+    it "accepts uploads that together stay within max_total_size" do
+      body = Raxon::OpenApi::RequestBody.new(type: :multipart, required: true, max_total_size: 20)
+      body.property :front, type: :file, required: true
+      body.property :back, type: :file, required: true
+
+      result = validator_for(body).call({front: upload("f.jpg", "a" * 9), back: upload("b.jpg", "a" * 9)})
+
+      expect(result.success?).to be(true)
+    end
+
+    it "rejects a filename extension outside the allowlist" do
+      body = request_body { |b| b.property :photo, type: :file, required: true, allowed_extensions: %w[jpg png] }
+
+      result = validator_for(body).call({photo: upload("payload.php", "x")})
+
+      expect(result.success?).to be(false)
+      expect(result.errors.to_h[:photo]).to eq(["must be one of the allowed file types: jpg, png"])
+    end
+
+    it "matches the extension allowlist case-insensitively and ignores a leading dot" do
+      body = request_body { |b| b.property :photo, type: :file, required: true, allowed_extensions: %w[.JPG] }
+
+      expect(validator_for(body).call({photo: upload("photo.jpg", "x")}).success?).to be(true)
+      expect(validator_for(body).call({photo: upload("PHOTO.JPG", "x")}).success?).to be(true)
+    end
+
+    it "rejects a file with no extension when an allowlist is declared" do
+      body = request_body { |b| b.property :photo, type: :file, required: true, allowed_extensions: %w[jpg] }
+
+      result = validator_for(body).call({photo: upload("noextension", "x")})
+
+      expect(result.success?).to be(false)
+    end
+
+    it "applies constraints to a file nested inside an object" do
+      body = request_body do |b|
+        b.property :profile, type: :object, required: true do |profile|
+          profile.property :avatar, type: :file, required: true, allowed_extensions: %w[png]
+        end
+      end
+
+      result = validator_for(body).call({profile: {avatar: upload("avatar.exe", "x")}})
+
+      expect(result.errors.to_h[:profile][:avatar]).to eq(["must be one of the allowed file types: png"])
+    end
+
+    it "leaves uploads unconstrained when nothing is declared" do
+      body = request_body { |b| b.property :photo, type: :file, required: true }
+
+      result = validator_for(body).call({photo: upload("anything.xyz", "a" * 10_000)})
+
+      expect(result.success?).to be(true)
+    end
+  end
+
+  it "does not expose coerced output from a failed result" do
+    # A caller that checks errors loosely must not receive values that failed
+    # upload validation. :count coerces to an integer on the way through
+    # Dry::Schema, so returning the schema's output here would hand back 5
+    # (and a "not-a-file" photo) for a request that was rejected.
+    body = request_body do |b|
+      b.property :photo, type: :file, required: true
+      b.property :count, type: :integer, required: true
+    end
+
+    result = validator_for(body).call({photo: "not-a-file", count: "5"})
+
+    expect(result.success?).to be(false)
+    expect(result.to_h).to eq({photo: "not-a-file", count: "5"})
+  end
+
   it "matches string-keyed params against declared file properties" do
     body = request_body { |b| b.property :photo, type: :file, required: true }
 

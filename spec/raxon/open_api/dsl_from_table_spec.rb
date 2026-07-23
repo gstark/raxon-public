@@ -295,6 +295,6 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_table" do
 
     described_class.from_table(:User, resource, :users)
 
-    expect(described_class.components.map(&:name)).to include(:User)
+    expect(described_class.components.map(&:name)).to include("User")
   end
 end

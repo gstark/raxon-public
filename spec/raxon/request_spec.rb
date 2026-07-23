@@ -119,6 +119,51 @@ RSpec.describe Raxon::Request do
       expect(request.form_params).to eq({})
     end
 
+    it "returns an empty hash for form parameters when there is no body or content type" do
+      rack_request = Rack::MockRequest.env_for("/users?name=query")
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.form_params).to eq({})
+    end
+
+    # Param resolution skips the body sources when a request provably has none,
+    # which it decides from the content type and the framing headers. A chunked
+    # body has no Content-Length to read, so it must not be mistaken for absent.
+    it "reads a chunked body that declares no content length" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.request_body type: :object, required: true do |body|
+        body.property :name, type: :string, required: true
+      end
+
+      rack_request = Rack::MockRequest.env_for(
+        "/users",
+        :method => "POST",
+        :input => {name: "Ada"}.to_json,
+        "CONTENT_TYPE" => "application/json",
+        "HTTP_TRANSFER_ENCODING" => "chunked"
+      )
+      rack_request.delete("CONTENT_LENGTH")
+      request = Raxon::Request.new(Rack::Request.new(rack_request), endpoint)
+
+      expect(request.params).to eq(name: "Ada")
+    end
+
+    # Same rule, reached the other way: no content type at all, so the framing
+    # header is the only thing saying a body is coming.
+    it "reads a chunked body that declares neither content type nor length" do
+      rack_request = Rack::MockRequest.env_for(
+        "/users",
+        :method => "POST",
+        :input => "name=Ada",
+        "HTTP_TRANSFER_ENCODING" => "chunked"
+      )
+      rack_request.delete("CONTENT_TYPE")
+      rack_request.delete("CONTENT_LENGTH")
+      request = Raxon::Request.new(Rack::Request.new(rack_request))
+
+      expect(request.params).to eq(name: "Ada")
+    end
+
     it "preserves source-specific values when merged params have collisions" do
       rack_request = Rack::MockRequest.env_for(
         "/users/path?shared=query",
@@ -647,85 +692,87 @@ RSpec.describe Raxon::Request do
   end
 
   describe "#remote_ip" do
-    context "by default (trust_proxy_headers disabled)" do
-      it "ignores forgeable X-Forwarded-For and returns the connection IP" do
-        rack_request = Rack::MockRequest.env_for(
-          "/test",
-          "REMOTE_ADDR" => "192.168.1.1",
-          "HTTP_X_FORWARDED_FOR" => "203.0.113.1"
-        )
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+    def request_with(remote_addr:, forwarded_for: nil)
+      env = {"REMOTE_ADDR" => remote_addr}
+      env["HTTP_X_FORWARDED_FOR"] = forwarded_for if forwarded_for
+      Raxon::Request.new(Rack::Request.new(Rack::MockRequest.env_for("/test", env)))
+    end
 
-        expect(request.remote_ip).to eq("192.168.1.1")
-      end
-
-      it "ignores forgeable X-Real-IP and returns the connection IP" do
-        rack_request = Rack::MockRequest.env_for(
-          "/test",
-          "REMOTE_ADDR" => "192.168.1.1",
-          "HTTP_X_REAL_IP" => "203.0.113.1"
-        )
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+    context "with no trusted proxies configured (default)" do
+      it "ignores forgeable X-Forwarded-For and returns the connection peer" do
+        request = request_with(remote_addr: "192.168.1.1", forwarded_for: "203.0.113.1")
 
         expect(request.remote_ip).to eq("192.168.1.1")
       end
     end
 
-    context "when trust_proxy_headers is enabled" do
-      # spec_helper resets configuration in a before hook, so set this in a
-      # before hook too (it runs after the reset).
-      before { Raxon.configuration.trust_proxy_headers = true }
+    context "with trusted proxies configured" do
+      # spec_helper resets configuration in a before hook, so set this after it.
+      before { Raxon.configuration.trusted_proxies = ["10.0.0.0/8"] }
 
-      it "returns X-Forwarded-For IP when present" do
-        rack_request = Rack::MockRequest.env_for(
-          "/test",
-          "REMOTE_ADDR" => "192.168.1.1",
-          "HTTP_X_FORWARDED_FOR" => "203.0.113.1"
-        )
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+      it "returns the client when the peer is a trusted proxy" do
+        request = request_with(remote_addr: "10.0.0.5", forwarded_for: "203.0.113.1")
 
         expect(request.remote_ip).to eq("203.0.113.1")
       end
 
-      it "returns first IP from X-Forwarded-For when multiple IPs present" do
-        rack_request = Rack::MockRequest.env_for(
-          "/test",
-          "REMOTE_ADDR" => "192.168.1.1",
-          "HTTP_X_FORWARDED_FOR" => "203.0.113.1, 198.51.100.1, 192.0.2.1"
-        )
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+      it "walks from the right, skipping every trusted hop" do
+        request = request_with(remote_addr: "10.0.0.9", forwarded_for: "203.0.113.1, 10.0.0.1, 10.0.0.2")
 
         expect(request.remote_ip).to eq("203.0.113.1")
       end
 
-      it "returns X-Real-IP when X-Forwarded-For is not present" do
-        rack_request = Rack::MockRequest.env_for(
-          "/test",
-          "REMOTE_ADDR" => "192.168.1.1",
-          "HTTP_X_REAL_IP" => "203.0.113.1"
-        )
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+      it "ignores a forged leftmost entry once a real client sits to its right" do
+        # An attacker prepends 9.9.9.9; the trusted proxy appended the real
+        # client 203.0.113.1, which is untrusted and to the right, so it wins.
+        request = request_with(remote_addr: "10.0.0.9", forwarded_for: "9.9.9.9, 203.0.113.1")
 
         expect(request.remote_ip).to eq("203.0.113.1")
       end
 
-      it "prefers X-Forwarded-For over X-Real-IP" do
-        rack_request = Rack::MockRequest.env_for(
-          "/test",
-          "REMOTE_ADDR" => "192.168.1.1",
-          "HTTP_X_FORWARDED_FOR" => "203.0.113.1",
-          "HTTP_X_REAL_IP" => "198.51.100.1"
-        )
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+      it "returns the peer when it is not a trusted proxy (direct connection)" do
+        # Backend reached directly; the whole X-Forwarded-For is attacker-supplied.
+        request = request_with(remote_addr: "203.0.113.7", forwarded_for: "9.9.9.9")
+
+        expect(request.remote_ip).to eq("203.0.113.7")
+      end
+
+      it "returns the peer when there is no X-Forwarded-For" do
+        request = request_with(remote_addr: "10.0.0.9")
+
+        expect(request.remote_ip).to eq("10.0.0.9")
+      end
+
+      it "supports plain-IP (non-CIDR) trusted entries" do
+        Raxon.configuration.trusted_proxies = ["127.0.0.1"]
+        request = request_with(remote_addr: "127.0.0.1", forwarded_for: "203.0.113.1")
 
         expect(request.remote_ip).to eq("203.0.113.1")
       end
 
-      it "falls back to standard IP when no proxy headers present" do
-        rack_request = Rack::MockRequest.env_for("/test", "REMOTE_ADDR" => "192.168.1.1")
-        request = Raxon::Request.new(Rack::Request.new(rack_request))
+      it "accepts IPAddr objects as trusted entries" do
+        Raxon.configuration.trusted_proxies = [IPAddr.new("10.0.0.0/8")]
+        request = request_with(remote_addr: "10.0.0.9", forwarded_for: "203.0.113.1")
 
-        expect(request.remote_ip).to eq("192.168.1.1")
+        expect(request.remote_ip).to eq("203.0.113.1")
+      end
+    end
+
+    context "with a malformed trusted-proxy entry" do
+      it "ignores the bad entry rather than widening trust or crashing" do
+        Raxon.configuration.trusted_proxies = ["not-an-ip", "10.0.0.0/8"]
+        request = request_with(remote_addr: "10.0.0.9", forwarded_for: "203.0.113.1")
+
+        expect(request.remote_ip).to eq("203.0.113.1")
+      end
+    end
+
+    context "with a malformed entry in the forwarding chain" do
+      it "treats an unparseable address as untrusted and stops the walk there" do
+        Raxon.configuration.trusted_proxies = ["10.0.0.0/8"]
+        request = request_with(remote_addr: "10.0.0.9", forwarded_for: "203.0.113.1, garbage")
+
+        expect(request.remote_ip).to eq("garbage")
       end
     end
   end

@@ -9,13 +9,19 @@ module Raxon
   # routed. The Router creates one when Raxon.configuration.reload_routes? is
   # true (default: development environment only).
   #
-  # The reload is a full reset: every route file is re-evaluated, so route
+  # The reload is a full rebuild: every route file is re-evaluated, so route
   # files must stay self-contained (which the isolated per-file class context
   # already encourages). State registered programmatically at boot survives —
   # the catchall endpoint is preserved, and OpenAPI components, security
-  # schemes, and configuration blocks live outside the route registry. A
-  # syntax error in a changed file surfaces on the request that triggered the
-  # reload; fixing the file triggers another reload and recovers.
+  # schemes, and configuration blocks live outside the route registry.
+  #
+  # The rebuild is published atomically (see {RouteLoader.reload!}), which
+  # matters because requests keep arriving during it. A concurrent request
+  # sees either the complete previous route table or the complete new one,
+  # never a partial build, and an error in a changed file leaves the previous
+  # table serving instead of taking every route down with it. The error still
+  # surfaces on the request that triggered the reload; fixing the file
+  # triggers another reload and recovers.
   class RouteReloader
     def initialize
       @mutex = Mutex.new
@@ -42,17 +48,18 @@ module Raxon
 
     def reload!
       # The catchall is registered programmatically at boot (config.ru); a
-      # file reload cannot recreate it, so carry it across the reset.
+      # file reload cannot recreate it, so carry it across the rebuild.
       catchall = RouteLoader.catchall
 
       # Route files register endpoint specs with the OpenAPI DSL as they
       # load; drop the previous generation so the generated document does not
       # accumulate duplicate operations. Boot-registered endpoints without a
       # route file are kept.
-      OpenApi::DSL.default_spec.endpoints.reject!(&:route_file_path)
+      OpenApi::DSL.default_spec.drop_route_file_endpoints!
 
-      RouteLoader.reset!
-      RouteLoader.load!
+      # Rebuilds from disk and swaps the registry in atomically, so a request
+      # in flight never sees a partially loaded route table.
+      RouteLoader.reload!
       RouteLoader.catchall = catchall if catchall
 
       Raxon.reload_helpers

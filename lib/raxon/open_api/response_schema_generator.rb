@@ -81,8 +81,9 @@ module Raxon
       # Initialize the generator with a response definition.
       #
       # @param response [Raxon::OpenApi::Response] The response to convert
-      def initialize(response)
+      def initialize(response, components: Raxon::OpenApi::DSL.components)
         @response = response
+        @components = components
         @property_schema_builder = PropertySchemaBuilder.new
       end
 
@@ -96,11 +97,30 @@ module Raxon
       #   result.success?  # => true
       #   result.to_h      # => {status: "ok", id: 42}
       def to_dry_schema
+        return referenced_schema if referenced_component
         return nil if @response.properties.empty?
 
         return ArrayRootValidator.new(array_schema_for(@response.properties)) if @response.type == "array"
 
         object_schema_for(@response.properties)
+      end
+
+      def reference_name
+        @response.as || @response.of
+      end
+
+      def referenced_schema
+        component = referenced_component
+
+        return ArrayRootValidator.new(array_schema_for(component.properties)) if @response.type == "array"
+
+        object_schema_for(component.properties)
+      end
+
+      def referenced_component
+        return nil unless reference_name
+
+        @components.find { |candidate| candidate.name.to_s == reference_name.to_s }
       end
 
       # Build a Dry::Schema for an object with the given properties.
@@ -132,10 +152,6 @@ module Raxon
         Dry::Schema.Params do
           builder.add_property_to_schema(self, ArrayRootValidator::ROOT_KEY, root_property)
         end
-      end
-
-      def map_type_to_dry(openapi_type)
-        @property_schema_builder.map_type_to_dry(openapi_type)
       end
     end
   end

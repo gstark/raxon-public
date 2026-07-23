@@ -1,5 +1,6 @@
 require "alba"
 require "dry-initializer"
+require "ipaddr"
 require "dry-schema"
 require "json"
 require "mustermann"
@@ -9,6 +10,9 @@ require "rack"
 require "time"
 
 # Load OpenAPI DSL library
+require_relative "raxon/open_api/error"
+require_relative "raxon/open_api/type_system"
+require_relative "raxon/open_api/spec_version"
 require_relative "raxon/open_api/property_container"
 require_relative "raxon/open_api/deferred_enum"
 require_relative "raxon/open_api/component"
@@ -17,10 +21,13 @@ require_relative "raxon/open_api/parameter"
 require_relative "raxon/open_api/parameters"
 require_relative "raxon/open_api/property"
 require_relative "raxon/open_api/request_body"
-require_relative "raxon/open_api/error"
 require_relative "raxon/open_api/security_scheme"
 
 # Load all OpenApi related files
+require_relative "raxon/open_api/column_mapper"
+require_relative "raxon/open_api/schema_emitter"
+require_relative "raxon/open_api/document_builder"
+require_relative "raxon/open_api/specification"
 require_relative "raxon/open_api/dsl"
 require_relative "raxon/uploaded_file"
 require_relative "raxon/open_api/property_schema_builder"
@@ -32,6 +39,7 @@ require_relative "raxon/open_api/response_schema_generator"
 # Load Raxon components
 require_relative "raxon/cli"
 require_relative "raxon/configuration"
+require_relative "raxon/path_containment"
 require_relative "raxon/error_handler"
 require_relative "raxon/handler_helpers"
 require_relative "raxon/instrumentation"
@@ -39,19 +47,30 @@ require_relative "raxon/template"
 require_relative "raxon/parameter_filter"
 require_relative "raxon/request_context"
 require_relative "raxon/param_resolver"
+require_relative "raxon/limited_input"
 require_relative "raxon/request"
 require_relative "raxon/response"
+require_relative "raxon/outcome"
+require_relative "raxon/representation_registry"
+require_relative "raxon/effective_endpoint"
 require_relative "raxon/endpoint_invocation"
 require_relative "raxon/routes"
 require_relative "raxon/route_loader"
 require_relative "raxon/route_reloader"
 require_relative "raxon/route_dsl"
 require_relative "raxon/router"
+require_relative "raxon/mount"
 require_relative "raxon/server"
 require_relative "raxon/version"
 
 module Raxon
   class Error < StandardError; end
+
+  # Raised while reading a request body that exceeds the configured
+  # max_request_body_size. Caught by the Router and turned into a 413 response;
+  # it deliberately bypasses user exception handlers, since an over-limit body
+  # is a protocol-level rejection rather than an application error.
+  class RequestBodyTooLarge < StandardError; end
 
   # Exception raised when a response body fails schema validation and
   # response_validation is configured as :raise.
@@ -90,6 +109,7 @@ module Raxon
   end
 
   @configuration = Configuration.new
+  @representations = RepresentationRegistry.new
   @helpers_loaded = false
 
   # Access the configuration object
@@ -97,9 +117,55 @@ module Raxon
     @configuration
   end
 
+  def self.representations
+    @representations ||= RepresentationRegistry.new
+  end
+
+  def self.register_representation(component, resource, adapter: RepresentationRegistry::AlbaAdapter.new)
+    representations.register(component, resource, adapter: adapter)
+  end
+
   # Configure Raxon with a block
   def self.configure
     yield configuration if block_given?
+  end
+
+  # Reset all global Raxon state to a clean slate.
+  #
+  # Intended for test suites — call it from a +before(:each)+ — and for full
+  # reloads. Replaces the configuration (see {reset_configuration!}) and empties
+  # the route and OpenAPI registries. After this, reconfigure and reload routes
+  # as your test needs.
+  #
+  # @return [void]
+  #
+  # @example
+  #   RSpec.configure do |config|
+  #     config.before(:each) do
+  #       Raxon.reset!
+  #       Raxon.configure { |c| c.routes_directory = "spec/fixtures/routes" }
+  #     end
+  #   end
+  def self.reset!
+    reset_configuration!
+    RouteLoader.reset!
+    OpenApi::DSL.reset!
+    @representations = RepresentationRegistry.new
+  end
+
+  # Replace the configuration with a fresh instance and forget any loaded
+  # handler helpers.
+  #
+  # Clears every configuration setting along with the accumulated global
+  # before/after/around blocks, exception handlers, and not_found handler, and
+  # resets the "helpers already loaded" flag so the next {load_helpers} runs
+  # again. Leaves the route and OpenAPI registries untouched — use {reset!} for
+  # a full reset.
+  #
+  # @return [void]
+  def self.reset_configuration!
+    @configuration = Configuration.new
+    @helpers_loaded = false
   end
 
   # Load all Raxon rake tasks
@@ -129,7 +195,13 @@ module Raxon
     return unless configuration.helpers_path
     return unless Dir.exist?(configuration.helpers_path)
 
+    roots = PathContainment.resolve_roots([configuration.helpers_path])
     Dir.glob(File.join(configuration.helpers_path, "**", "*.rb")).each do |file|
+      unless PathContainment.contained?(file, roots)
+        raise Raxon::Error, "Refusing to load helper file outside helpers_path: #{file} " \
+                            "(it resolves outside the configured helpers tree — check for a symlink)."
+      end
+
       load file
     end
 

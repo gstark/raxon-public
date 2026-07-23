@@ -40,6 +40,7 @@ module Raxon
     # @param metadata [Hash]
     # @return [void]
     def run(request, response, metadata)
+      metadata.merge!(@handler_endpoint.static_metadata) if @handler_endpoint.respond_to?(:static_metadata)
       run_metadata_blocks(request, response, metadata)
       return unless authenticate(request, response, metadata)
 
@@ -55,9 +56,16 @@ module Raxon
     # OpenAPI semantics: the requirements array is an OR (any one grants
     # access) and the schemes within a requirement are an AND (all must pass).
     # A requirement is enforceable only when every scheme it references has an
-    # authenticator block; requirements referencing documentation-only schemes
-    # are skipped, and when no requirement is enforceable the declaration is
-    # documentation-only and nothing runs (backwards compatible).
+    # authenticator block; requirements referencing declared-but-unenforced
+    # (documentation-only) schemes are skipped, and when every requirement is
+    # documentation-only nothing runs (backwards compatible).
+    #
+    # A requirement naming a scheme that was never declared is a different case:
+    # almost always a typo in +endpoint.security+ or a scheme defined after the
+    # route loaded. The endpoint was meant to be protected, so we fail closed
+    # (401) rather than admit the request — the previous behavior silently left
+    # such endpoints wide open while the generated document advertised them as
+    # secured.
     #
     # Authenticator blocks receive (request, metadata, scopes) and grant access
     # by returning truthy. When no enforceable requirement passes, the response
@@ -66,12 +74,24 @@ module Raxon
     #
     # @return [Boolean] true when the request may proceed
     def authenticate(request, response, metadata)
-      requirements = Array(@handler_endpoint.security)
+      # Read before wrapping: #security is nil on the overwhelming majority of
+      # endpoints, and Array(nil) allocates an empty array per request to ask
+      # whether it is empty.
+      declared = @handler_endpoint.security
+      return true if declared.nil?
+
+      requirements = Array(declared)
       return true if requirements.empty?
 
       schemes = Raxon::OpenApi::DSL.security_schemes
+
+      references_undeclared_scheme = requirements.any? do |requirement|
+        requirement.keys.any? { |name| !schemes.key?(name.to_sym) }
+      end
+      return deny(response) if references_undeclared_scheme
+
       enforceable = requirements.select do |requirement|
-        requirement.keys.all? { |name| schemes[name.to_sym]&.authenticator }
+        requirement.keys.all? { |name| schemes[name.to_sym].authenticator }
       end
       return true if enforceable.empty?
 
@@ -82,6 +102,13 @@ module Raxon
       end
       return true if granted
 
+      deny(response)
+    end
+
+    # Set the response to a 401 and signal that the lifecycle should stop.
+    #
+    # @return [false]
+    def deny(response)
       response.code = :unauthorized
       response.body = {error: "Unauthorized"}
       false
@@ -137,17 +164,77 @@ module Raxon
       request.params
 
       return bad_request(response, "Invalid JSON in request body") if request.json_parse_error
-      return bad_request(response, "Validation failed", request.validation_errors) if request.validation_errors
+      return validation_failed(response, request) if request.validation_errors
 
-      context = request.endpoint_context(@handler_endpoint)
-      execute_block_in_context(context, @handler_endpoint.handler_block, request, response, metadata)
+      context_endpoint = @handler_endpoint.respond_to?(:leaf) ? @handler_endpoint.leaf : @handler_endpoint
+      context = request.endpoint_context(context_endpoint)
+      result = execute_block_in_context(context, @handler_endpoint.handler_block, request, response, metadata)
+      map_handler_result(result, response) if @handler_endpoint.respond_to?(:handler_mode) && @handler_endpoint.handler_mode == :return_value
 
       validate_response_body(response)
     end
 
+    def map_handler_result(result, response)
+      return if result.nil?
+      if result.is_a?(Raxon::Outcome)
+        response.code = result.status
+        result.headers.each { |key, value| response.header(key, value) }
+        response.body = represent(result.body)
+        return
+      end
+
+      successes = @handler_endpoint.responses.keys.select { |status| status.between?(200, 299) }
+      if successes.length > 1
+        raise Raxon::Error, "Return-value handler in #{@handler_endpoint.route_file_path} has multiple 2xx responses; return Raxon::Outcome or use handler"
+      end
+      response.code = successes.first || 200
+      response.body = represent(result)
+    end
+
+    def represent(value)
+      declaration = @handler_endpoint.respond_to?(:representation) && @handler_endpoint.representation
+      return value unless declaration
+
+      entry = declaration[:entry]
+      entry.adapter.call(entry.resource, value, collection: declaration[:collection], params: declaration[:params])
+    end
+
+    # Write the response for a failed request validation.
+    #
+    # 400 by default: the request was malformed — a missing field, a value of
+    # the wrong type. 422 when the request was well-formed but carried content
+    # the endpoint refuses, which today means an upload whose extension is
+    # outside the declared allowlist.
+    #
+    # Errors are reported together either way, so a request with both a missing
+    # field and a rejected upload lists both; only the status differs.
+    #
+    # @return [void]
+    def validation_failed(response, request)
+      code = request.validation_unprocessable? ? :unprocessable_entity : :bad_request
+      if (profile = validation_error_profile)
+        response.code = profile.fetch(:status)
+        response.body = profile[:body] ? profile[:body].call("Validation failed", request.validation_errors) : {error: "Validation failed", details: request.validation_errors}
+        return
+      end
+      write_error(response, code, "Validation failed", request.validation_errors)
+    end
+
+    def validation_error_profile
+      return unless @handler_endpoint.respond_to?(:validation_profile)
+
+      name = @handler_endpoint.validation_profile
+      name && Raxon.configuration.validation_error_profiles[name]
+    end
+
     # @return [void]
     def bad_request(response, error, details = nil)
-      response.code = :bad_request
+      write_error(response, :bad_request, error, details)
+    end
+
+    # @return [void]
+    def write_error(response, code, error, details = nil)
+      response.code = code
       body = {error: error}
       body[:details] = details if details
       response.body = body

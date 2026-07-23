@@ -23,10 +23,13 @@ module Raxon
       attr_reader :after_blocks
       attr_reader :metadata_blocks
       attr_reader :handler_block
+      attr_reader :default_responses, :static_metadata, :inferred_path_parameters
+      attr_reader :representation
       attr_accessor :method
       attr_accessor :route_file_path
       attr_accessor :erb_template
       attr_accessor :route_context
+      attr_accessor :effective_endpoint
 
       # Initialize a new endpoint with empty operations, responses, and parameters.
       # Can optionally specify path and method for routing purposes.
@@ -48,6 +51,9 @@ module Raxon
         @security = nil
         @validate_response = nil
         @responses = {}
+        @default_responses = {}
+        @static_metadata = {}
+        @inferred_path_parameters = []
         @response_schemas = nil
         @parameters = Parameters.new
         @request_body = nil
@@ -162,6 +168,12 @@ module Raxon
         @validate_response = args[0]
       end
 
+      def validation_profile(name = nil)
+        return @validation_profile if name.nil?
+
+        @validation_profile = name.to_sym
+      end
+
       # Add a before hook that will be called before the handler.
       # Multiple before hooks can be added and will be executed in the order they were defined.
       #
@@ -215,8 +227,12 @@ module Raxon
       #     metadata[:user_id] = request.params[:user_id]
       #     metadata[:request_time] = Time.now
       #   end
-      def metadata(&block)
-        @metadata_blocks << block
+      def metadata(values = nil, &block)
+        unless values.nil?
+          raise ArgumentError, "metadata expects a Hash" unless values.is_a?(Hash)
+          @static_metadata.merge!(values.transform_keys(&:to_sym))
+        end
+        @metadata_blocks << block if block
       end
 
       # Check if this endpoint has any metadata blocks.
@@ -235,6 +251,7 @@ module Raxon
       #   endpoint.operation [:get, :post]
       def operation(verbs)
         @operations.concat(Array(verbs)).uniq!
+        @operations
       end
 
       # Configure endpoint parameters or return the parameters object.
@@ -349,11 +366,20 @@ module Raxon
       #   endpoint.response 404, type: :object, description: "User not found" do |response|
       #     response.property :error, type: :string
       #   end
-      def response(status, options, &block)
-        @response_schemas = nil
+      def response(status, options = {}, &block)
+        invalidate_response_schemas
         @responses[status] = Response.new(**options)
         yield @responses[status] if block_given?
         @responses[status]
+      end
+
+      # A response declaration intended to be inherited by descendants. It is
+      # not emitted as an operation for an all.rb endpoint by itself.
+      def default_response(status, options = {}, &block)
+        invalidate_response_schemas
+        @default_responses[status] = Response.new(**options)
+        yield @default_responses[status] if block_given?
+        @default_responses[status]
       end
 
       # Define a standard validation error response for this endpoint.
@@ -445,6 +471,31 @@ module Raxon
       #   end
       def handler(&block)
         @handler_block = block
+        @handler_mode = :explicit
+      end
+
+      # Opt-in return-value handler. Existing #handler return values remain
+      # ignored for compatibility.
+      def handle(&block)
+        @handler_block = block
+        @handler_mode = :return_value
+      end
+
+      # Declare a registered representation and its successful response in one
+      # place. The handler may then return domain objects from #handle.
+      def represents(resource, collection: false, status: 200, params: {})
+        entry = Raxon.representations.fetch(resource)
+        @representation = {entry: entry, collection: collection, params: params}.freeze
+        options = collection ? {type: :array, of: entry.component} : {type: :object, as: entry.component}
+        response(status, options)
+      end
+
+      def handler_mode
+        @handler_mode || :explicit
+      end
+
+      def infer_path_parameters(names)
+        @inferred_path_parameters = names.map(&:to_sym).freeze
       end
 
       # Generate a Dry::Schema validator for this endpoint's request parameters and body.
@@ -464,7 +515,7 @@ module Raxon
 
       # Generate Dry::Schema validators for this endpoint's responses.
       #
-      # Keys are normalized to integer status codes (via {DSL.status_to_code}) so
+      # Keys are normalized to integer status codes (via {DocumentBuilder.status_to_code}) so
       # responses declared with a symbol status (e.g. +exception_error+ /
       # +response :unprocessable_entity+) can still be looked up by the integer
       # +Response#status_code+ at validation time. Without this, symbol-declared
@@ -478,7 +529,7 @@ module Raxon
       def response_schemas
         @response_schemas ||= @responses.each_with_object({}) do |(status, response), schemas|
           schema = Raxon::OpenApi::ResponseSchemaGenerator.new(response).to_dry_schema
-          schemas[DSL.status_to_code(status)] = schema if schema
+          schemas[DocumentBuilder.status_to_code(status)] = schema if schema
         end
       end
 
@@ -554,6 +605,15 @@ module Raxon
       def invalidate_request_schema
         @request_schema = nil
         @request_schema_generated = false
+      end
+
+      # Drop the memoized response schemas so the next read rebuilds them. Called
+      # whenever a response is (re)defined, mirroring invalidate_request_schema
+      # so both schema caches are managed the same way. Response schemas are
+      # built lazily on first read, so this must run before that read — which the
+      # define-then-serve lifecycle of a route file guarantees.
+      def invalidate_response_schemas
+        @response_schemas = nil
       end
     end
   end

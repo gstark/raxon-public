@@ -203,6 +203,47 @@ RSpec.describe Raxon::RouteReloader do
     expect { reloader.reload_if_changed }.not_to raise_error
   end
 
+  it "keeps serving the previous routes while a reload is in progress" do
+    # A reload runs while requests are in flight. Router#call releases the
+    # reloader's mutex before it reads the registry, so a concurrent request
+    # can reach the lookup mid-reload. Clearing the live registry and
+    # repopulating it in place made every route 404 for the whole duration of
+    # the load — a glob plus a read and eval of every route file, not an
+    # instant. The rebuild is now staged and published in one assignment, so a
+    # reader sees the complete old registry or the complete new one.
+    write_route(@routes_dir, "ping/get.rb", ping_route("v1"), mtime: past)
+    router = build_router
+    expect(get_value(router)).to eq([200, {"value" => "v1"}])
+
+    observed = nil
+    allow(Raxon::RouteLoader).to receive(:load_route_files).and_wrap_original do |original, *args|
+      # Probe from another thread: the staging registry is deliberately visible
+      # only to the loading thread, so reading it here would measure nothing.
+      # This is what a concurrent request actually sees mid-rebuild.
+      observed = Thread.new {
+        Raxon::RouteLoader.routes.find("GET", "/ping") ? :found : :missing
+      }.value
+      original.call(*args)
+    end
+
+    write_route(@routes_dir, "ping/get.rb", ping_route("v2"))
+    expect(get_value(router)).to eq([200, {"value" => "v2"}])
+    expect(observed).to eq(:found)
+  end
+
+  it "keeps the previous routes when a reload raises" do
+    write_route(@routes_dir, "ping/get.rb", ping_route("v1"), mtime: past)
+    router = build_router
+    expect(get_value(router)).to eq([200, {"value" => "v1"}])
+
+    # Nothing is published unless the whole rebuild succeeds, so a broken file
+    # leaves the working registry serving rather than a half-built one.
+    write_route(@routes_dir, "boom/get.rb", "raise 'kaboom'")
+    expect { get_value(router) }.to raise_error(/kaboom/)
+
+    expect(Raxon::RouteLoader.routes.find("GET", "/ping")).not_to be_nil
+  end
+
   it "does not watch the filesystem when disabled" do
     write_route(@routes_dir, "ping/get.rb", ping_route("v1"), mtime: past)
     Raxon.configure do |config|
@@ -237,15 +278,24 @@ RSpec.describe Raxon::Configuration, "#reload_routes?" do
     expect(Raxon::Configuration.new.reload_routes?).to be(false)
   end
 
-  it "honors an explicit override in either direction" do
-    ENV["RAXON_ENV"] = "production"
+  it "honors an explicit override within development" do
+    ENV["RAXON_ENV"] = "development"
+
+    config = Raxon::Configuration.new
+    config.reload_routes = false
+    expect(config.reload_routes?).to be(false)
+
     config = Raxon::Configuration.new
     config.reload_routes = true
     expect(config.reload_routes?).to be(true)
+  end
 
-    ENV["RAXON_ENV"] = "development"
+  it "forces reloading off outside development even when explicitly enabled" do
+    ENV["RAXON_ENV"] = "production"
+
     config = Raxon::Configuration.new
-    config.reload_routes = false
+    config.reload_routes = true
+
     expect(config.reload_routes?).to be(false)
   end
 end

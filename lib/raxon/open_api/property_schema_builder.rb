@@ -38,6 +38,10 @@ module Raxon
 
       def dry_schema_type(field_type)
         case field_type
+        when nil
+          # An untyped property means "any type" in the emitted document (no
+          # `type` key), so it must not be validated as a string at runtime.
+          :any
         when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
           :string
         when "number"
@@ -52,27 +56,6 @@ module Raxon
           :hash
         else
           :string
-        end
-      end
-
-      def map_type_to_dry(openapi_type)
-        case openapi_type
-        when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
-          "params.string"
-        when "number"
-          "params.float"
-        when "integer"
-          "params.integer"
-        when "boolean"
-          "params.bool"
-        when "object"
-          "params.hash"
-        when "array"
-          "params.array"
-        when "file"
-          "params.any"
-        else
-          "params.string"
         end
       end
 
@@ -170,10 +153,29 @@ module Raxon
 
         constraints = dry_constraints_for(field, type)
 
+        return add_untyped_field(key, field, constraints) if type == :any
+
         if field.nullable
           key.maybe(type, **constraints)
         else
           key.value(type, **constraints)
+        end
+      end
+
+      # An untyped property is "any type" in the emitted document, so it gets no
+      # type predicate at runtime.
+      #
+      # It cannot go through the typed path above: dry-schema silently drops
+      # predicates passed alongside :any — `value(:any, included_in?: [...])`
+      # accepts anything — so a declared enum would vanish. Passing the
+      # constraints with no type at all enforces them correctly.
+      def add_untyped_field(key, field, constraints)
+        if field.nullable
+          constraints.empty? ? key.maybe(:any) : key.maybe(**constraints)
+        elsif constraints.empty?
+          key.value(:any)
+        else
+          key.value(**constraints)
         end
       end
 
@@ -208,9 +210,17 @@ module Raxon
         constraints = {}
 
         if dry_type == :string
+          # Order matters, and is load-bearing rather than stylistic. dry-schema
+          # chains these predicates with a short-circuiting AND in declaration
+          # order, so putting the cheap length checks ahead of format? means a
+          # too-long value is rejected on size and the regexp is never run
+          # against it at all. That caps the work a hostile oversized subject can
+          # provoke before compile_pattern's timeout is even needed — the
+          # structural half of the ReDoS defense. Reordering these three lines
+          # silently removes it; property_schema_builder_spec pins the behavior.
           constraints[:min_size?] = field.min_length if field.respond_to?(:min_length) && field.min_length
           constraints[:max_size?] = field.max_length if field.respond_to?(:max_length) && field.max_length
-          constraints[:format?] = Regexp.new(field.pattern.to_s) if field.respond_to?(:pattern) && field.pattern
+          constraints[:format?] = compile_pattern(field.pattern) if field.respond_to?(:pattern) && field.pattern
         end
 
         if dry_type == :integer || dry_type == :float
@@ -229,6 +239,17 @@ module Raxon
         constraints.merge!(enum_constraint(field)) unless dry_type == :array || dry_type == :hash
 
         constraints
+      end
+
+      # Compile a declared +pattern+ into a Regexp carrying the configured
+      # per-match timeout, so a catastrophically-backtracking pattern raises
+      # Regexp::TimeoutError on hostile input rather than pinning a CPU (ReDoS).
+      # A nil timeout leaves the regexp unbounded (Ruby's default).
+      #
+      # @param pattern [String, Regexp]
+      # @return [Regexp]
+      def compile_pattern(pattern)
+        Regexp.new(pattern.to_s, timeout: Raxon.configuration.regexp_timeout)
       end
 
       # Build the dry-schema inclusion constraint for a field's enum, or an

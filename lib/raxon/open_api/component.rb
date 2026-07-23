@@ -21,12 +21,15 @@ module Raxon
       include StrictOptions
 
       # @!attribute [r] name
-      #   @return [Symbol, String] The component name
-      param :name
+      #   @return [String] The component name, normalized to a String so that
+      #     `component(:User)` and `component("User")` register and resolve
+      #     identically (a Symbol name previously broke `$ref` matching for
+      #     `of:`/`as:` references).
+      param :name, proc(&:to_s)
 
       # @!attribute [r] type
       #   @return [String] The base type (:object, :array, etc.), automatically processed
-      option :type, proc { |value| OpenApi::DSL.process_type(value) }
+      option :type, proc { |value| OpenApi::TypeSystem.process_type_option(value) }
 
       # @!attribute [r] description
       #   @return [String] Component description (default: "")
@@ -39,12 +42,19 @@ module Raxon
       # @!attribute [r] extensions
       #   @return [Hash] OpenAPI specification extensions merged into the emitted
       #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
-      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
+      option :extensions, proc { |value| OpenApi::TypeSystem.process_extensions(value) }, default: proc { {} }
 
       # @!attribute [r] properties
       #   @return [Hash] Hash of property definitions
       option :properties, default: proc { {} }
 
+      # Always nil for a component. It exists so the shared, duck-typed
+      # property_to_json emitter can treat a Component like any other schema
+      # object (it probes +.as+ to decide between a $ref and an inline schema);
+      # a component is never itself a reference, so the probe must return nil
+      # rather than raise NoMethodError.
+      #
+      # @return [nil]
       attr_reader :as
 
       # Construct a component, rejecting any unknown option (see {StrictOptions}).

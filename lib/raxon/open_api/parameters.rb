@@ -28,7 +28,7 @@ module Raxon
       # @example
       #   define :user_id, type: :string, in: :path, description: "User identifier"
       #   define :page, type: :number, in: :query, description: "Page number"
-      def define(name, options, &block)
+      def define(name, options = {}, &block)
         parameter = Parameter.new(name, **options)
         yield parameter if block_given?
         @parameters << parameter

@@ -7,10 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Not yet released. The published `raxon` 0.1.0 gem contains only the
+[0.1.0](#010---2025-11-08) section below; everything here lands in the next
+release.
+
 ### Added
 
 - Comprehensive README documentation with deployment guide, performance benchmarks, and framework comparisons
-- Global error handler middleware (`Api::ErrorHandler`) for production safety
+- Global error handler middleware (`Raxon::ErrorHandler`) for production safety
   - Catches unhandled exceptions and returns secure JSON responses
   - Optional logging with full error details
   - Optional error notification callbacks for services like Sentry
@@ -25,6 +29,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Response body validation is now opt-in, off by default in every environment
+  (was `:error_response` outside production and `:log` in production)
+  - Running the response schema over every body was the single most expensive
+    thing Raxon did per request: ~58% of a small JSON response (20.5us to 8.6us)
+  - Opt in globally with `config.response_validation = :error_response` (or
+    `:raise` / `:log`), or per endpoint with `endpoint.validate_response true`,
+    which works regardless of the global setting
+  - `endpoint.validate_response false` still opts an endpoint out when the
+    global setting is on
+- Param resolution merges only the sources a request actually carries, and no
+  longer allocates a closure per deferred source
+  - The lenient merge allocated three intermediate hashes even when a request
+    carried only a query string and a path parameter; empty sources are skipped
+    and the common case allocates one
+  - Headers and cookies are fetched from the request itself rather than through
+    a per-request lambda each
+  - `Request#params` 5.6us to 4.9us on a path-parameter request, 5 fewer objects
+    per request wherever params are resolved
+- Param resolution skips the form and JSON sources for a request that provably
+  has no body
+  - A GET reads both on every request that resolves params — `Rack::Request#POST`
+    parses the input, and both sources consult the content type — to learn there
+    is nothing there
+  - Only requests declaring no content type, no `Transfer-Encoding`, and either
+    no `Content-Length` or a length of zero are treated as empty; anything
+    describing a body reads its sources as before
+  - `Request#params` 6.3us to 5.6us on a path-parameter request, and 5 fewer
+    objects per request wherever params are resolved
+- Dynamic route lookup no longer costs more as an application declares more
+  routes
+  - Patterns were matched by asking each in turn, so every request paid for
+    every dynamic route ever declared. A 100-resource API (800 routes) spent
+    72us resolving `/api/v1/x/{id}` and 162us resolving
+    `/api/v1/x/{id}/archive` — more than the rest of those requests together
+  - Patterns are now indexed by their segments, and only the entries whose
+    shape admits a path are asked. Lookup is flat: ~2.9us and ~3.2us at 800
+    routes, and unchanged at 8
+  - The index narrows; Mustermann still matches and extracts params, and
+    candidates are still tried in registration order, so which pattern answers
+    an ambiguous path is unchanged
+- Two per-request costs removed from the path every response pays
+  - `RAXON_DEBUG` is read once when the router is built, not on every
+    `debug_log` call. It must now be set before the router is constructed,
+    which is how it was already used: a server builds one router at boot
+  - An endpoint declaring no security no longer allocates an empty array per
+    request to ask whether its requirements are empty
+  - Together: a plaintext response 7.5us to 6.9us, 3 fewer objects per request
+    on every endpoint
+- Header and cookie request sources are materialized only when a parameter
+  declares `in: :header` or `in: :cookie`
+  - `Request#headers` allocates a hash of every `HTTP_*` env key; endpoints
+    declaring neither no longer pay for it
+  - Cuts source collection from 4.4us to 2.8us on a request with declared params
 - Request validation now enforces declared `enum`/`allowable_values` constraints
   - Generates a dry-schema `included_in?` predicate for scalar fields, rejecting values outside the enum
   - For array fields the enum constrains each element (matching the OpenAPI items schema)

@@ -22,9 +22,14 @@ module Raxon
 
     # @param filters [Array<String, Symbol, Regexp>] Name fragments (or regexps)
     #   whose matching values should be redacted.
-    def initialize(filters)
+    # @param regexp_timeout [Float, nil] Per-match timeout applied to Regexp
+    #   filters so a backtracking-heavy pattern cannot pin a CPU on an
+    #   attacker-controlled key (defaults to config.regexp_timeout).
+    def initialize(filters, regexp_timeout: Raxon.configuration.regexp_timeout)
       @string_filters = filters.reject { |f| f.is_a?(Regexp) }.map { |f| f.to_s.downcase }
-      @regexp_filters = filters.select { |f| f.is_a?(Regexp) }
+      @regexp_filters = filters.select { |f| f.is_a?(Regexp) }.map do |regexp|
+        Regexp.new(regexp.source, regexp.options, timeout: regexp_timeout)
+      end
     end
 
     # Return a copy of +data+ with sensitive values redacted.

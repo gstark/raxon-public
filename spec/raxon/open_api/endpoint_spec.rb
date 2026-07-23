@@ -22,6 +22,12 @@ RSpec.describe Raxon::OpenApi::Endpoint do
       endpoint.operation([:get, :post])
       expect(endpoint.operations).to eq([:get, :post])
     end
+
+    it "returns the operations array (not the nil from uniq!) for chaining" do
+      endpoint = described_class.new
+      expect(endpoint.operation(:get)).to eq([:get])
+      expect(endpoint.operation(:get)).to eq([:get]) # uniq! would return nil here
+    end
   end
 
   describe "#description" do

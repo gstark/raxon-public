@@ -54,9 +54,9 @@ routes/api/v1/users/$id/get.rb
 Raxon.route do |endpoint|
   endpoint.description "Retrieves a specific user by ID"
 
-  endpoint.parameters do |params|
-    params.define :id, type: :string, in: :path, description: "The user ID", required: true
-  end
+  # The filename supplies a required string :id path parameter. Refine it only
+  # when the default needs more information.
+  endpoint.path_param :id, type: :integer, description: "The user ID"
 
   endpoint.response 200, type: :object do |response|
     response.property :id, type: :string
@@ -72,8 +72,8 @@ end
 
 **Matches:**
 
-- `GET /api/v1/users/123` → `params[:id]` = `"123"`
-- `GET /api/v1/users/abc-xyz` → `params[:id]` = `"abc-xyz"`
+- `GET /api/v1/users/123` → `params[:id]` = `123`
+- `GET /api/v1/users/456` → `params[:id]` = `456`
 
 ### Multiple Parameters
 
@@ -131,6 +131,8 @@ Routes with `$parameter` or `__parameter__` segments are automatically converted
 - `routes/api/v1/users/__id__/get.rb` → path: `/api/v1/users/{id}`
 - `routes/api/v1/users/$id/get.rb` → path: `/api/v1/users/{id}`
 - Parameters defined with `in: :path` appear in the OpenAPI specification
+- Every filename-derived parameter appears automatically as a required string
+  path parameter; an explicit `path_param` refines that declaration
 - The generated OpenAPI documentation will show these as path parameters
 
 ## Pattern Matching
@@ -145,10 +147,10 @@ The routing system uses regex pattern matching to extract parameters:
 
 Path parameters work with all HTTP methods. The router correctly matches both the method and the path pattern:
 
-- `routes/api/v1/users/$id/get.rb` → matches `GET /api/v1/users/123`
-- `routes/api/v1/users/$id/put.rb` → matches `PUT /api/v1/users/123`
+- `routes/api/v1/users/__id__/get.rb` → matches `GET /api/v1/users/123`
+- `routes/api/v1/users/__id__/put.rb` → matches `PUT /api/v1/users/123`
 - `GET /api/v1/users/123` will NOT match the PUT route
 
 ## Example Implementation
 
-See [examples/routes/api/v1/users/$id/get.rb](../examples/routes/api/v1/users/$id/get.rb) for a complete working example.
+See [examples/routes/api/v1/users/__id__/get.rb](../examples/routes/api/v1/users/__id__/get.rb) for a complete working example.

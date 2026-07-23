@@ -311,43 +311,17 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
       end
     end
 
-    context "with unknown/custom types" do
-      it "generates schema for required unknown types using default behavior" do
+    context "with an array of a component reference" do
+      # A component name is not a dry-schema type, so array elements fall back to
+      # loose string validation. (Unknown scalar `type:` values are now rejected
+      # at definition, so this of: path is what still exercises that fallback.)
+      it "validates unknown element types loosely" do
         response = Raxon::OpenApi::Response.new(type: :object)
-        response.property :custom_field, type: :custom, required: true
+        response.property :tags, type: :array, of: :Widget, required: true
 
-        generator = described_class.new(response)
-        schema = generator.to_dry_schema
+        schema = described_class.new(response).to_dry_schema
 
-        result = schema.call(custom_field: "value")
-        expect(result.success?).to be true
-        expect(result.to_h).to eq({custom_field: "value"})
-      end
-
-      it "generates schema for optional unknown types" do
-        response = Raxon::OpenApi::Response.new(type: :object)
-        response.property :status, type: :string, required: true
-        response.property :custom_field, type: :custom, required: false
-
-        generator = described_class.new(response)
-        schema = generator.to_dry_schema
-
-        result = schema.call(status: "ok")
-        expect(result.success?).to be true
-        expect(result.to_h).to eq({status: "ok"})
-      end
-
-      it "validates optional unknown types when present" do
-        response = Raxon::OpenApi::Response.new(type: :object)
-        response.property :status, type: :string, required: true
-        response.property :custom_field, type: :custom, required: false
-
-        generator = described_class.new(response)
-        schema = generator.to_dry_schema
-
-        result = schema.call(status: "ok", custom_field: "custom_value")
-        expect(result.success?).to be true
-        expect(result.to_h).to eq({status: "ok", custom_field: "custom_value"})
+        expect(schema.call(tags: ["a", "b"]).success?).to be true
       end
     end
 
@@ -448,50 +422,6 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator do
         expect(result.success?).to be true
         expect(result.to_h).to eq({status: "ok", metadata: {key: "value"}})
       end
-    end
-  end
-
-  describe "#map_type_to_dry" do
-    it "maps string type" do
-      response = Raxon::OpenApi::Response.new(type: :object)
-      generator = described_class.new(response)
-
-      expect(generator.map_type_to_dry("string")).to eq("params.string")
-    end
-
-    it "maps number type to float" do
-      response = Raxon::OpenApi::Response.new(type: :object)
-      generator = described_class.new(response)
-
-      expect(generator.map_type_to_dry("number")).to eq("params.float")
-    end
-
-    it "maps boolean type" do
-      response = Raxon::OpenApi::Response.new(type: :object)
-      generator = described_class.new(response)
-
-      expect(generator.map_type_to_dry("boolean")).to eq("params.bool")
-    end
-
-    it "maps object type" do
-      response = Raxon::OpenApi::Response.new(type: :object)
-      generator = described_class.new(response)
-
-      expect(generator.map_type_to_dry("object")).to eq("params.hash")
-    end
-
-    it "maps array type" do
-      response = Raxon::OpenApi::Response.new(type: :object)
-      generator = described_class.new(response)
-
-      expect(generator.map_type_to_dry("array")).to eq("params.array")
-    end
-
-    it "defaults unknown types to string" do
-      response = Raxon::OpenApi::Response.new(type: :object)
-      generator = described_class.new(response)
-
-      expect(generator.map_type_to_dry("unknown")).to eq("params.string")
     end
   end
 end

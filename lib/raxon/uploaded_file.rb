@@ -9,10 +9,19 @@ module Raxon
   # Downstream code that expects UploadedFile duck-typing
   # (e.g., ActiveStorage, image processing) works transparently.
   #
+  # SECURITY: +original_filename+, +content_type+, and +headers+ are supplied by
+  # the client and are entirely untrusted — a `.jpg` name or `image/jpeg` type
+  # is no proof of the actual bytes. Do not store an upload under its
+  # +original_filename+ (path traversal, overwrites, executable names) and do
+  # not trust +content_type+ for access-control or rendering decisions. Store
+  # under a server-generated name outside any executable/static root, enforce
+  # per-file/aggregate size limits, and validate the real content (extension
+  # allowlist + signature/MIME sniffing) before use. See docs/security.md.
+  #
   # @example
   #   file = Raxon::UploadedFile.new(rack_file_hash)
-  #   file.original_filename  # => "photo.jpg"
-  #   file.content_type       # => "image/jpeg"
+  #   file.original_filename  # => "photo.jpg"  (untrusted)
+  #   file.content_type       # => "image/jpeg" (untrusted)
   #   file.tempfile.path      # => "/tmp/RackMultipart..."
   class UploadedFile
     extend Forwardable
@@ -34,10 +43,6 @@ module Raxon
       return nil unless rack_file_hash?(value)
 
       new(value)
-    end
-
-    def self.valid_upload?(value)
-      !normalize(value).nil?
     end
 
     def initialize(hash)

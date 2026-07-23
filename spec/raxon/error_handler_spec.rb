@@ -118,6 +118,24 @@ RSpec.describe Raxon::ErrorHandler do
         expect(log_content).to include("POST /api/v1/users")
       end
 
+      it "sanitizes CR/LF in the exception message to prevent log forging" do
+        log_output = StringIO.new
+        logger = Logger.new(log_output)
+
+        app = lambda { |_env|
+          raise StandardError, "boom\r\nERROR -- : forged admin login"
+        }
+        middleware = Raxon::ErrorHandler.new(app, logger: logger)
+
+        middleware.call(Rack::MockRequest.env_for("/test"))
+
+        # The forged content stays on the exception's own log line (CR/LF turned
+        # to spaces) instead of becoming a separate, fake log record.
+        message_line = log_output.string.lines.find { |l| l.include?("StandardError") }
+        expect(message_line).to include("boom  ERROR -- : forged admin login")
+        expect(message_line).not_to match(/[\r\n].*forged/)
+      end
+
       it "does not log when logger is not provided" do
         app = lambda { |env|
           raise StandardError, "Test error"

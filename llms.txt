@@ -1,0 +1,144 @@
+# Raxon
+
+> A Rack 3 JSON API framework for Ruby. Routes are files, each endpoint declares
+> its own OpenAPI contract next to its handler, and requests and responses are
+> validated against that contract at runtime.
+
+This file orients an agent **building an application with Raxon**. If you are
+modifying the Raxon gem itself, read `CLAUDE.md` and `CONTEXT.md` instead — they
+are contributor guidance and describe internals you do not need here.
+
+A project created with `raxon new` also gets its own `AGENTS.md` covering the
+same ground with that project's paths filled in.
+
+## The rule that matters
+
+Every endpoint declares its contract — parameters, request body, and a schema
+per response status — in the same file as its handler. Responses are validated
+against the declared schema at runtime, so a response with an undeclared field
+fails loudly rather than silently succeeding.
+
+**Declare the schema first, then write the handler to match.** Changing what a
+handler returns without changing its declared response is the single most common
+way to break a Raxon endpoint.
+
+## A complete route file
+
+```ruby
+# routes/api/v1/users/__id__/get.rb
+Raxon.route do
+  description "Fetch a user by ID"
+
+  parameters do |params|
+    params.define :id, type: :uuid, in: :path, description: "User ID"
+  end
+
+  response 200, type: :object do
+    property :id, type: :uuid
+    property :email, type: :email
+    property :created_at, type: :datetime
+  end
+
+  response 404, type: :object do
+    property :error, type: :string
+  end
+
+  handler do |request, response, metadata|
+    user = User.find_by(id: request.params[:id])
+    next response.not_found(error: "Not found") unless user
+
+    response.ok id: user.id, email: user.email, created_at: user.created_at
+  end
+end
+```
+
+## File → route mapping
+
+The path comes from the file's location under the routes directory; the filename
+is the HTTP method.
+
+| File                                | Route                    |
+| ----------------------------------- | ------------------------ |
+| `routes/api/v1/health/get.rb`       | `GET /api/v1/health`     |
+| `routes/api/v1/users/post.rb`       | `POST /api/v1/users`     |
+| `routes/api/v1/users/__id__/get.rb` | `GET /api/v1/users/{id}` |
+| `routes/api/v1/all.rb`              | every `/api/v1/*` request |
+
+Valid filenames: `all`, `get`, `post`, `put`, `patch`, `delete`, `head`,
+`options` (`.rb`). Anything else raises at boot with the list of valid names.
+Path parameters use the dunder form `__name__`; the legacy `$name` form works
+but trips on shell expansion.
+
+An `all.rb` holds `before`/`after`/`metadata` blocks shared by everything below
+it. With no `handler` it is middleware only and is not itself a route.
+
+## The two DSL forms are equivalent
+
+```ruby
+Raxon.route do              # zero-arity: evaluated against the endpoint
+  description "..."
+  response(200, type: :object) { property :ok, type: :boolean }
+  handler { |request, response, metadata| response.ok ok: true }
+end
+
+Raxon.route do |endpoint|   # one-arity: receives the endpoint
+  endpoint.description "..."
+  endpoint.response(200, type: :object) { |r| r.property :ok, type: :boolean }
+  endpoint.handler { |request, response, metadata| response.ok ok: true }
+end
+```
+
+Handler, before, after, and metadata blocks all receive
+`(request, response, metadata)`; trailing arguments may be omitted.
+
+## Types
+
+`:string`, `:number`, `:integer`, `:boolean`, `:object`, `:array` (with `of:`),
+`:file`, `:datetime`, `:date`, `:uuid`, `:email`, or an array of types for a
+union. Omit `type:` entirely for a genuinely free-form value. A typo'd type name
+raises at load with the valid list.
+
+Constraints travel with the declaration: `required:`, `nullable:`, `enum:`,
+`min_length:`/`max_length:`, `minimum:`/`maximum:`, `pattern:`,
+`min_items:`/`max_items:`, and for uploads `max_size:`/`allowed_extensions:`.
+
+## Lifecycle order
+
+metadata (parent → child) → before (parent → child) → handler → after
+(child → parent). `response.halt` stops the rest immediately. Map domain
+exceptions to statuses with `config.rescue_from` rather than rescuing inside
+every handler.
+
+## Verify loop — run these after every change
+
+```
+bundle exec raxon routes                  # every route loaded, with its handler
+bundle exec rake raxon:openapi:generate   # schemas compile → doc/apidoc/api.json
+bundle exec rspec                         # responses conform to declared schemas
+```
+
+`raxon routes` catches bad filenames and load errors, the rake task catches
+invalid schema declarations, and `conform_to_response_schema` in specs catches
+handlers that have drifted from their contract. A change is not done until all
+three are green.
+
+## Scaffolding
+
+```
+bundle exec raxon new my-api
+bundle exec raxon generate route api/v1/users get post
+bundle exec raxon generate route api/v1/users/__id__ get
+```
+
+## Docs
+
+- [README](README.md): full reference — routing, the OpenAPI DSL, validation, handler helpers, hooks, HTML rendering, test helpers, and every configuration option.
+- [Request lifecycle](docs/lifecycle.md): exact order of metadata, before, handler, after, and where `halt` and `rescue_from` cut in.
+- [Path parameters](docs/path_parameters.md): the `__name__` and `$name` directory forms, and how parameters reach `request.params`.
+- [File uploads](docs/file_uploads.md): `type: :file`, the `UploadedFile` interface, and declaring `max_size` / `max_total_size` / `allowed_extensions`.
+- [Security model](docs/security.md): what Raxon guarantees and what it does not — trusted route files, request size limits, ReDoS handling, upload caveats, proxy headers, and error-log safety. Read before exposing an app publicly.
+
+## Optional
+
+- [CLAUDE.md](CLAUDE.md): contributor guidance for changing Raxon itself, including the OpenAPI DSL internals.
+- [CONTEXT.md](CONTEXT.md): architecture vocabulary for the gem's own internals.

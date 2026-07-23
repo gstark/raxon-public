@@ -30,7 +30,10 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
     {
       "integer" => "integer",
       "bigint" => "integer",
+      "smallint" => "integer",
       "double precision" => "number",
+      "real" => "number",
+      "numeric" => "number",
       "numeric(8,2)" => "number",
       "string" => "string",
       "character varying(255)" => "string",
@@ -40,6 +43,8 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
       "timestamp without time zone" => "datetime",
       "timestamp with time zone" => "datetime",
       "date" => "date",
+      "uuid" => "uuid",
+      "json" => "object",
       "jsonb" => "object"
     }.each do |sql_type, expected_type|
       it "maps #{sql_type} columns to :#{expected_type}" do
@@ -56,7 +61,7 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
       end
     end
 
-    it "raises for an unknown sql type" do
+    it "maps an unknown sql type to :string rather than raising" do
       resource = Class.new do
         include Alba::Resource
 
@@ -64,8 +69,9 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
       end
       model = fake_model("value" => column("geography"))
 
-      expect { described_class.from_resource(:Record, resource, model) }
-        .to raise_error(/Unknown sql type: geography/)
+      properties = properties_for(:Record, resource, model)
+
+      expect(properties[:value].type).to eq("string")
     end
   end
 
@@ -260,7 +266,7 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
 
     described_class.from_resource(:User, resource, model)
 
-    expect(described_class.components.map(&:name)).to include(:User)
+    expect(described_class.components.map(&:name)).to include("User")
   end
 end
 

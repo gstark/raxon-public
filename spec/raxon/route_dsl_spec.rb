@@ -219,6 +219,32 @@ RSpec.describe "Raxon.route" do
     end
   end
 
+  it "accepts a bare `property :name` in a route file, and validates it as any type" do
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "api", "v1", "bare"))
+      File.write(File.join(dir, "api", "v1", "bare", "get.rb"), <<~RUBY)
+        Raxon.route do
+          response 200, type: :object do
+            property :notes
+          end
+
+          handler do |_request, response|
+            response.code = :ok
+            response.body = { notes: { any: [1, 2] } }
+          end
+        end
+      RUBY
+
+      Raxon.configure { |config| config.routes_directory = dir }
+      Raxon::RouteLoader.reset!
+      Raxon::RouteLoader.load!
+
+      endpoint = Raxon::RouteLoader.routes.find("GET", "/api/v1/bare")[:endpoint]
+      expect(endpoint.responses[200].properties[:notes].type).to be_nil
+      expect(endpoint.response_schemas[200].call(notes: {any: [1, 2]}).success?).to be true
+    end
+  end
+
   it "preserves route-file helper methods loaded in isolation" do
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, "helper"))

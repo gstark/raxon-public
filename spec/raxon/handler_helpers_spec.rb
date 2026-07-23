@@ -9,8 +9,7 @@ RSpec.describe "Handler Helpers" do
 
   before do
     # Reset configuration and helpers_loaded flag before each test
-    Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
-    Raxon.instance_variable_set(:@helpers_loaded, false)
+    Raxon.reset_configuration!
 
     # Remove any previously loaded helper methods from HandlerHelpers
     Raxon::HandlerHelpers.singleton_class.instance_methods(false).each do |method|

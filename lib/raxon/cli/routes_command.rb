@@ -10,29 +10,8 @@ module Raxon
       # Load the Raxon library
       require_relative "../../raxon"
 
-      # Define a stub for 'run' method which is normally provided by rackup
-      # We only need the configuration from config.ru, not to actually run the app
-      unless Object.method_defined?(:run)
-        Object.class_eval do
-          def run(_app)
-            # Stub method - do nothing
-          end
-        end
-      end
-
-      # If in a Raxon project (has config.ru), try to load it for configuration
-      if File.exist?("config.ru")
-        begin
-          load File.expand_path("config.ru")
-        rescue LoadError, StandardError => e
-          # If config.ru fails to load, try to infer routes directory
-          puts "Warning: Could not load config.ru (#{e.message}), using default configuration"
-          configure_from_directory
-        end
-      else
-        # Use default routes directory
-        configure_from_directory
-      end
+      require_relative "project_loader"
+      Raxon::ProjectLoader.load_configuration { configure_from_directory }
 
       require_relative "../routes_formatter"
       Raxon::RoutesFormatter.display

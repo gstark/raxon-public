@@ -188,7 +188,10 @@ def start_framework(framework, app_dir, gemfile, port, log)
     )
   else
     Process.spawn(
-      {"BUNDLE_GEMFILE" => gemfile, "RACK_ENV" => "production"},
+      # Both, and explicitly: RAXON_ENV takes precedence over RACK_ENV, so an
+      # inherited RAXON_ENV=development from the caller's shell would otherwise
+      # win and benchmark development-mode route reloading.
+      {"BUNDLE_GEMFILE" => gemfile, "RACK_ENV" => "production", "RAXON_ENV" => "production"},
       "bundle", "exec", "rackup", "config.ru", "--host", "127.0.0.1", "--port", port.to_s,
       chdir: app_dir,
       out: log,

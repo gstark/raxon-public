@@ -51,9 +51,21 @@ module Raxon
     #
     # @example With fallback app
     #   server = Raxon::Server.new(Rails.application)
-    def initialize(fallback = nil, **args, &block)
+    def initialize(fallback = nil, **options, &block)
       @middleware = []
       @app = nil
+
+      # Support the keyword forms documented in the README/config.ru
+      # (`Server.new(fallback:)`, `Server.new(routes_directory:)`). Anything
+      # else is a typo — fail loudly rather than silently ignoring it, which
+      # previously produced a server that 404'd every route.
+      fallback = options.delete(:fallback) if options.key?(:fallback)
+      if (routes_directory = options.delete(:routes_directory))
+        Raxon.configuration.routes_directory = routes_directory
+      end
+      unless options.empty?
+        raise ArgumentError, "unknown keyword#{"s" if options.size > 1}: #{options.keys.join(", ")}"
+      end
 
       @router = Router.new(fallback: fallback)
 
@@ -79,15 +91,7 @@ module Raxon
     #   server.use Rack::Session::Cookie, secret: "my_secret"
     #   server.use Raxon::ErrorHandler, logger: Logger.new($stdout)
     def use(new_middleware, *args, **kwargs, &block)
-      if new_middleware == Raxon::ErrorHandler
-        # Auto-inject the configured on_error callback and logger
-        if !kwargs.key?(:on_error) && Raxon.configuration.on_error
-          kwargs = kwargs.merge(on_error: Raxon.configuration.on_error)
-        end
-        if !kwargs.key?(:logger) && Raxon.configuration.logger
-          kwargs = kwargs.merge(logger: Raxon.configuration.logger)
-        end
-      end
+      kwargs = error_handler_kwargs(kwargs) if new_middleware == Raxon::ErrorHandler
 
       @middleware << [new_middleware, args, kwargs, block]
     end
@@ -113,6 +117,13 @@ module Raxon
       # Start with the router as the base application
       new_app = router
 
+      # Ensure unhandled exceptions become a clean JSON 500 rather than leaking
+      # to the app server's default page. Wraps the router directly (innermost)
+      # unless the app added its own ErrorHandler or opted out.
+      if auto_wrap_error_handler?
+        new_app = Raxon::ErrorHandler.new(new_app, **error_handler_kwargs({}))
+      end
+
       # Apply middleware in reverse order (last added is outermost)
       @middleware.reverse_each do |middleware, args, kwargs, block|
         new_app = if kwargs.empty?
@@ -128,6 +139,27 @@ module Raxon
       end
 
       new_app
+    end
+
+    # Whether to auto-wrap the router in Raxon::ErrorHandler: only when enabled
+    # in configuration and the app has not already added an ErrorHandler itself.
+    #
+    # @return [Boolean]
+    def auto_wrap_error_handler?
+      Raxon.configuration.wrap_error_handler &&
+        @middleware.none? { |middleware, *| middleware == Raxon::ErrorHandler }
+    end
+
+    # Fill in the configured on_error callback and logger for an ErrorHandler,
+    # unless the caller supplied them. Shared by `use` and the auto-wrap.
+    #
+    # @param kwargs [Hash]
+    # @return [Hash]
+    def error_handler_kwargs(kwargs)
+      config = Raxon.configuration
+      kwargs = kwargs.merge(on_error: config.on_error) if !kwargs.key?(:on_error) && config.on_error
+      kwargs = kwargs.merge(logger: config.logger) if !kwargs.key?(:logger) && config.logger
+      kwargs
     end
   end
 end

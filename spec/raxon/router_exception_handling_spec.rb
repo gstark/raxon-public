@@ -5,7 +5,7 @@ require "spec_helper"
 RSpec.describe "Raxon::Router exception handling" do
   before do
     Raxon::RouteLoader.reset!
-    Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
+    Raxon.reset_configuration!
   end
 
   describe "rescue_from" do

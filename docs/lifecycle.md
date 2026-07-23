@@ -68,6 +68,37 @@ For `GET /api/users`:
 
 The parent `all.rb` handler does **not** run in this case.
 
+`all.rb` also supplies inheritable endpoint defaults. Static `metadata`,
+`path_param` refinements, `default_response`, security, response-validation
+settings, and `validation_profile` are composed with the selected child route;
+the nearest declaration wins. Request bodies, descriptions, summaries,
+operation IDs, and handlers remain local to the selected route.
+
+```ruby
+# routes/api/orders/__id__/all.rb
+Raxon.route do
+  path_param :id, type: :integer
+  default_response 404, type: :object do
+    property :error, type: :string
+  end
+  metadata authenticated: true
+end
+```
+
+When a route family needs a validation status/body different from the default
+400/422 behavior, register and opt into a profile explicitly:
+
+```ruby
+Raxon.configure do |config|
+  config.validation_error_profile(:uploads, status: :unprocessable_entity) do |message, details|
+    {error: message, problems: details}
+  end
+end
+
+# in an all.rb or selected route
+validation_profile :uploads
+```
+
 When an `all.rb` endpoint is the selected endpoint, its handler runs:
 
 ```text
@@ -153,6 +184,21 @@ If a block halts:
 - The handler does not run unless it already ran before the halt.
 - Route `after` blocks and global `after` blocks do not run after the halt.
 - `around` blocks only run their code after `inner.call` if they ensure/rescue the halt or otherwise handle control flow. A plain statement after `inner.call` is skipped when the halt propagates.
+
+## Exception handling
+
+An exception raised anywhere in the pipeline above — global blocks, metadata, before, handler, or after — unwinds to a single rescue around the whole request. Handlers registered with `config.rescue_from` are matched most-specific class first, and the first match builds the response:
+
+```ruby
+Raxon.configure do |config|
+  config.rescue_from(MyApp::NotFound) do |exception, request, response, metadata|
+    response.code = :not_found
+    response.body = {error: exception.message}
+  end
+end
+```
+
+Because the rescue wraps the entire pipeline, a handled exception skips the remaining stages — `after` blocks do not run. `Raxon::HaltException` (flow control), `Raxon::RequestBodyTooLarge` (413), and `Rack::BadRequest` (400) are never routed to `rescue_from`. Anything unmatched propagates to `on_error` and the `Raxon::ErrorHandler` middleware's 500.
 
 ## Catchall routes
 

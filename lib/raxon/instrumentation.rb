@@ -54,10 +54,10 @@ module Raxon
           # come from error-handling middleware — log 500 rather than the
           # stale status. Handled exceptions (dispatched inside the block)
           # never raise through here; surface them from request metadata.
-          if $! && !$!.is_a?(Raxon::HaltException)
-            payload[:status] = 500
+          payload[:status] = if $! && !$!.is_a?(Raxon::HaltException)
+            500
           else
-            payload[:status] = response.status_code
+            response.status_code
           end
           if (handled = request.metadata[:handled_exception])
             payload[:exception] ||= [handled.class.name, handled.message]

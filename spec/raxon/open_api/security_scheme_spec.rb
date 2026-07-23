@@ -57,6 +57,42 @@ RSpec.describe Raxon::OpenApi::SecurityScheme do
       expect(scheme.to_openapi).to eq(type: "openIdConnect", openIdConnectUrl: "https://example.com/.well-known/openid-configuration")
     end
   end
+
+  describe "field validation" do
+    it "rejects an option that does not apply to the scheme type" do
+      expect { described_class.new(:key, type: :apiKey, flows: {}) }
+        .to raise_error(ArgumentError, /not valid for a apiKey security scheme/)
+    end
+
+    it "refuses a secret-bearing field inside a flow" do
+      flows = {authorizationCode: {authorizationUrl: "https://x/auth", tokenUrl: "https://x/token", client_secret: "shh"}}
+
+      expect { described_class.new(:oauth, type: :oauth2, flows: flows) }
+        .to raise_error(ArgumentError, /Invalid field\(s\) in the OAuth2 authorizationCode flow: client_secret.*never put secrets in flows/m)
+    end
+
+    it "rejects an unknown flow name" do
+      expect { described_class.new(:oauth, type: :oauth2, flows: {magic: {}}) }
+        .to raise_error(ArgumentError, /Unknown OAuth2 flow :magic/)
+    end
+
+    it "rejects a non-Hash flows value" do
+      expect { described_class.new(:oauth, type: :oauth2, flows: "nope") }
+        .to raise_error(ArgumentError, /flows must be a Hash/)
+    end
+
+    it "rejects a non-Hash flow definition" do
+      expect { described_class.new(:oauth, type: :oauth2, flows: {password: "nope"}) }
+        .to raise_error(ArgumentError, /password flow must be a Hash/)
+    end
+
+    it "accepts the standard password flow name" do
+      flows = {password: {tokenUrl: "https://x/token", scopes: {}}}
+      scheme = described_class.new(:oauth, type: :oauth2, flows: flows)
+
+      expect(scheme.to_openapi).to eq(type: "oauth2", flows: flows)
+    end
+  end
 end
 
 RSpec.describe Raxon::OpenApi::DSL, "security scheme registration and emission" do

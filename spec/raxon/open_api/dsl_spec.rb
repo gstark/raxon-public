@@ -82,7 +82,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
   end
 
-  describe ".process_type" do
+  describe Raxon::OpenApi::TypeSystem, ".process_type" do
     it "converts symbol types to strings" do
       expect(described_class.process_type(:string)).to eq("string")
       expect(described_class.process_type(:number)).to eq("number")
@@ -97,7 +97,7 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
   end
 
-  describe ".status_to_code" do
+  describe Raxon::OpenApi::DocumentBuilder, ".status_to_code" do
     it "returns integers unchanged" do
       expect(described_class.status_to_code(200)).to eq(200)
       expect(described_class.status_to_code(404)).to eq(404)
@@ -205,6 +205,27 @@ RSpec.describe Raxon::OpenApi::DSL do
       )
     end
 
+    it "emits a $ref for a Symbol-named component referenced via of:" do
+      # Regression: a Symbol component name previously failed the $ref lookup
+      # (Symbol vs String), emitting an invalid {"type": "Post"} item schema.
+      # The documented DSL style uses Symbols, so this is the common path.
+      described_class.component(:Post, type: :object) do |post|
+        post.property(:title, type: :string)
+      end
+
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/posts")
+        endpoint.response(200, type: :array, of: :Post)
+      end
+
+      spec = described_class.to_open_api
+      items = spec.dig("paths", "/api/v1/posts", "get", "responses", "200",
+        "content", "application/json", "schema", "items")
+
+      expect(items).to eq("$ref" => "#/components/schemas/Post")
+    end
+
     it "outputs standard OpenAPI date and date-time formats" do
       described_class.component("Event", type: :object) do |event|
         event.property(:starts_at, type: :datetime)
@@ -227,9 +248,9 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "maps database date/time columns to standard OpenAPI date formats" do
-      timestamp_options = described_class.send(:build_property_options, "timestamp(6) without time zone", false, "Created at", false, nil)
-      date_options = described_class.send(:build_property_options, "date", false, "Birthday", true, nil)
-      timestamp_array_options = described_class.send(:build_property_options, "timestamp(6) without time zone", true, "Event times", false, nil)
+      timestamp_options = Raxon::OpenApi::ColumnMapper.build_property_options("timestamp(6) without time zone", false, "Created at", false, nil)
+      date_options = Raxon::OpenApi::ColumnMapper.build_property_options("date", false, "Birthday", true, nil)
+      timestamp_array_options = Raxon::OpenApi::ColumnMapper.build_property_options("timestamp(6) without time zone", true, "Event times", false, nil)
 
       expect(timestamp_options).to include(type: :datetime, format: :date_time)
       expect(date_options).to include(type: :date, format: :date)
@@ -237,9 +258,9 @@ RSpec.describe Raxon::OpenApi::DSL do
     end
 
     it "maps database integer columns to integer OpenAPI type" do
-      integer_options = described_class.send(:build_property_options, "integer", false, "ID", false, nil)
-      bigint_array_options = described_class.send(:build_property_options, "bigint", true, "IDs", false, nil)
-      numeric_options = described_class.send(:build_property_options, "numeric(10,2)", false, "Price", false, nil)
+      integer_options = Raxon::OpenApi::ColumnMapper.build_property_options("integer", false, "ID", false, nil)
+      bigint_array_options = Raxon::OpenApi::ColumnMapper.build_property_options("bigint", true, "IDs", false, nil)
+      numeric_options = Raxon::OpenApi::ColumnMapper.build_property_options("numeric(10,2)", false, "Price", false, nil)
 
       expect(integer_options).to include(type: :integer)
       expect(bigint_array_options).to include(type: :array, of: :integer)
@@ -528,6 +549,48 @@ RSpec.describe Raxon::OpenApi::DSL do
         "description" => "Photo file"
       )
       expect(schema["properties"]["caption"]).to include("type" => "string")
+    end
+
+    it "emits a declared max_size as x-max-bytes on the binary schema" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:post)
+        endpoint.path("/api/v1/avatars")
+
+        endpoint.request_body type: :multipart, required: true do |body|
+          body.property(:avatar, type: :file, max_size: 5 * 1024 * 1024, allowed_extensions: %w[png])
+        end
+
+        endpoint.response(201, type: :object)
+      end
+
+      schema = described_class.to_open_api
+        .dig("paths", "/api/v1/avatars", "post", "requestBody", "content", "multipart/form-data", "schema")
+
+      expect(schema["properties"]["avatar"]).to include(
+        "type" => "string",
+        "format" => "binary",
+        "x-max-bytes" => 5 * 1024 * 1024
+      )
+      expect(schema["properties"]["avatar"]).not_to have_key("maxLength")
+      # allowed_extensions has no standard OpenAPI keyword; it stays runtime-only
+      # rather than being invented into the document.
+      expect(schema["properties"]["avatar"].keys).not_to include("allowedExtensions", "allowed_extensions")
+    end
+
+    it "emits a file-typed response without a size constraint" do
+      # Response carries no max_size option, unlike Property. The emitter is
+      # shared across both, so it must not assume the option exists.
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/export")
+        endpoint.response(200, type: :file, description: "CSV export")
+      end
+
+      schema = described_class.to_open_api
+        .dig("paths", "/api/v1/export", "get", "responses", "200", "content", "application/json", "schema")
+
+      expect(schema).to include("type" => "string", "format" => "binary")
+      expect(schema).not_to have_key("maxLength")
     end
 
     it "keeps object request bodies as application/json" do
@@ -998,6 +1061,9 @@ RSpec.describe Raxon::OpenApi::DSL do
       allow(rack_request).to receive(:content_type).and_return("application/json")
       allow(rack_request).to receive(:path_parameters).and_return({})
       allow(rack_request).to receive(:env).and_return({})
+      # Response validation is opt-in and off by default; these specs are about
+      # what it does once turned on.
+      Raxon.configure { |config| config.response_validation = :error_response }
     end
 
     it "validates successful response body" do

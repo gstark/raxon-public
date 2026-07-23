@@ -8,7 +8,12 @@ module Raxon
   # raw exception details from being leaked to clients and ensures consistent
   # error response formatting.
   #
-  # @example Basic usage
+  # Raxon::Server installs this automatically (config.wrap_error_handler, default
+  # true), so you only need to add it explicitly to pass a logger/on_error or to
+  # place it at a specific point in your middleware stack — doing so replaces the
+  # automatic one.
+  #
+  # @example Basic usage (only needed to customize; on by default)
   #   use Raxon::ErrorHandler
   #
   # @example With custom logger
@@ -68,6 +73,11 @@ module Raxon
 
     # Log the error with details.
     #
+    # The exception message and request line are sanitized before logging: an
+    # attacker-influenced message or path can carry CR/LF and forge extra log
+    # lines. Backtrace frames are sanitized individually so the intentional
+    # multi-line layout is kept while no single frame can inject a new record.
+    #
     # @param error [StandardError] The exception to log
     # @param env [Hash] Rack environment hash
     # @return [void]
@@ -75,14 +85,24 @@ module Raxon
       return unless @logger
 
       request = Rack::Request.new(env)
-      @logger.error("#{error.class}: #{error.message}")
-      @logger.error("Request: #{request.request_method} #{request.path}")
-      @logger.error("Backtrace:\n  #{error.backtrace.join("\n  ")}") if error.backtrace
+      @logger.error("#{error.class}: #{sanitize(error.message)}")
+      @logger.error("Request: #{sanitize(request.request_method)} #{sanitize(request.path)}")
+      return unless error.backtrace
+
+      frames = error.backtrace.map { |frame| sanitize(frame) }.join("\n  ")
+      @logger.error("Backtrace:\n  #{frames}")
     end
 
     # Notify external error tracking service if configured.
     #
-    # Calls the on_error callback with: (request, response, error, env)
+    # Calls the on_error callback with: (request, response, error, env).
+    #
+    # SECURITY: +env+ is the raw Rack environment and carries credentials
+    # (Authorization, Cookie, X-API-Key headers, the body stream, ...). It is
+    # passed through so callbacks that need request context work, but a callback
+    # that forwards data to an external service must filter first — see
+    # {Raxon::ParameterFilter} and docs/security.md. Raxon does not serialize
+    # +env+ itself.
     #
     # @param error [StandardError] The exception to notify
     # @param env [Hash] Rack environment hash
@@ -98,7 +118,16 @@ module Raxon
       @on_error.call(request, response, error, env)
     rescue => e
       # Don't let error notification failures crash the app
-      @logger&.error("Error notification failed: #{e.message}")
+      @logger&.error("Error notification failed: #{sanitize(e.message)}")
+    end
+
+    # Replace control characters (notably CR/LF) with spaces so a value cannot
+    # forge additional log records.
+    #
+    # @param value [Object]
+    # @return [String]
+    def sanitize(value)
+      value.to_s.gsub(/[[:cntrl:]]/, " ")
     end
   end
 end

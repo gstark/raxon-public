@@ -31,6 +31,11 @@ RSpec.describe Raxon::OpenApi::Response do
       expect(response.content_type).to eq("text/csv")
     end
 
+    it "rejects a content_type that is not a media-type string" do
+      expect { described_class.new(type: :string, content_type: :json) }
+        .to raise_error(Raxon::OpenApi::Error, /Invalid content_type :json/)
+    end
+
     it "sets the enum" do
       response = described_class.new(type: :array, of: :string, enum: %w[a b])
       expect(response.enum).to eq(%w[a b])

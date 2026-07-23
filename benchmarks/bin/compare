@@ -1,0 +1,183 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# A/B two revisions of Raxon against each other.
+#
+# Exists because the obvious way to measure a change — run the benchmark before,
+# run it after, compare — is not reliable enough here to resolve the size of
+# change that optimization work actually produces. A sub-microsecond difference
+# in a 20us request is inside this machine's GC and scheduler noise. Measuring
+# several endpoints in one process compounds it: whichever runs first is
+# measured against a different heap than the one that runs last.
+#
+# So: one endpoint per process, CPU time rather than wall clock, and the median
+# of several repetitions. Both revisions are measured the same way in the same
+# session, alternating, so a drifting machine moves both numbers together.
+#
+# Usage:
+#   ruby benchmarks/bin/compare                    # working tree vs main
+#   ruby benchmarks/bin/compare --base HEAD~1
+#   ruby benchmarks/bin/compare --endpoints json,path_param --reps 15
+
+require "fileutils"
+require "optparse"
+require "tmpdir"
+
+ROOT = File.expand_path("..", __dir__)
+REPO = File.expand_path("..", ROOT)
+DEFAULT_ENDPOINTS = {
+  "plaintext" => "/plaintext",
+  "json" => "/json",
+  "path_param" => "/users/123",
+  "validated_params" => "/search?limit=10&status=active&cursor=abc123"
+}.freeze
+
+options = {
+  base: "main",
+  endpoints: DEFAULT_ENDPOINTS.keys,
+  iterations: 30_000,
+  warmup: 2_000,
+  reps: 9
+}
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: ruby benchmarks/bin/compare [options]"
+
+  opts.on("--base REV", "Revision to compare the working tree against (default: #{options[:base]})") do |value|
+    options[:base] = value
+  end
+
+  opts.on("--endpoints LIST", "Comma-separated: #{DEFAULT_ENDPOINTS.keys.join(",")}") do |value|
+    options[:endpoints] = value.split(",").map(&:strip)
+  end
+
+  opts.on("-n", "--iterations N", Integer, "requests per repetition (default: #{options[:iterations]})") do |value|
+    options[:iterations] = value
+  end
+
+  opts.on("--warmup N", Integer, "warmup requests (default: #{options[:warmup]})") do |value|
+    options[:warmup] = value
+  end
+
+  opts.on("--reps N", Integer, "repetitions per endpoint; the median is reported (default: #{options[:reps]})") do |value|
+    options[:reps] = value
+  end
+
+  opts.on("-h", "--help", "Print this help") do
+    puts opts
+    exit
+  end
+end.parse!
+
+unknown = options[:endpoints] - DEFAULT_ENDPOINTS.keys
+unless unknown.empty?
+  warn "Unknown endpoint(s): #{unknown.join(", ")}"
+  exit 1
+end
+
+# The measured process. Loads one lib directory, drives one endpoint, and prints
+# one number. Kept as a string rather than a file in bin/ because it is an
+# implementation detail of this script, not something to run on its own.
+RUNNER = <<~RUBY
+  ENV["BUNDLE_GEMFILE"] ||= #{File.join(ROOT, "Gemfile").inspect}
+  ENV["RAXON_ENV"] = "production"
+  ENV["RACK_ENV"] = "production"
+  require "bundler/setup"
+  require "rack/mock_request"
+
+  lib = ENV.fetch("RAXON_LIB")
+  abort "missing lib: \#{lib}" unless File.exist?(File.join(lib, "raxon.rb"))
+  $LOAD_PATH.unshift(lib)
+
+  # Bundler resolves the path gem by evaluating raxon.gemspec, which loads the
+  # working tree's version.rb; loading the other revision then redefines the
+  # constant. Harmless, and the only warning this require is expected to emit.
+  verbose = $VERBOSE
+  $VERBOSE = nil
+  require "raxon"
+  $VERBOSE = verbose
+
+  Raxon.configure do |config|
+    config.routes_directory = #{File.join(ROOT, "apps", "raxon", "routes").inspect}
+    config.reload_routes = false
+  end
+  abort "route reloading is on" if Raxon.configuration.reload_routes?
+
+  Raxon::RouteLoader.reset!
+  Raxon::RouteLoader.load!
+  app = Raxon::Server.new
+
+  n = Integer(ENV.fetch("BENCH_N"))
+  reps = Integer(ENV.fetch("BENCH_REPS"))
+  warmup = Integer(ENV.fetch("BENCH_WARMUP"))
+  envs = Array.new(n) { Rack::MockRequest.env_for(ENV.fetch("BENCH_PATH")) }
+
+  drive = lambda do |count|
+    i = 0
+    while i < count
+      _status, _headers, body = app.call(envs[i])
+      body.close if body.respond_to?(:close)
+      i += 1
+    end
+  end
+
+  drive.call([warmup, n].min)
+
+  clock = Process::CLOCK_PROCESS_CPUTIME_ID
+  runs = Array.new(reps) do
+    GC.start
+    started = Process.clock_gettime(clock)
+    drive.call(n)
+    ((Process.clock_gettime(clock) - started) / n) * 1_000_000
+  end.sort
+
+  puts runs[reps / 2]
+RUBY
+
+def measure(lib, path, options, runner_path)
+  env = {
+    "RAXON_LIB" => lib,
+    "BENCH_PATH" => path,
+    "BENCH_N" => options[:iterations].to_s,
+    "BENCH_REPS" => options[:reps].to_s,
+    "BENCH_WARMUP" => options[:warmup].to_s
+  }
+  output = IO.popen(env, ["ruby", runner_path], &:read)
+  raise "measurement failed for #{path} against #{lib}" unless $?.success?
+
+  Float(output.lines.last)
+end
+
+Dir.mktmpdir("raxon-compare") do |tmp|
+  runner_path = File.join(tmp, "runner.rb")
+  File.write(runner_path, RUNNER)
+
+  base_tree = File.join(tmp, "base")
+  puts "Checking out #{options[:base]}..."
+  unless system("git", "-C", REPO, "worktree", "add", "--detach", "-f", base_tree, options[:base],
+    out: File::NULL, err: File::NULL)
+    warn "could not create a worktree for #{options[:base]}"
+    exit 1
+  end
+
+  begin
+    base_lib = File.join(base_tree, "lib")
+    head_lib = File.join(REPO, "lib")
+
+    puts "#{options[:iterations]} requests x #{options[:reps]} reps per endpoint, CPU time, median\n\n"
+    puts format("%-18s %12s %12s %10s", "endpoint", options[:base], "working tree", "change")
+
+    options[:endpoints].each do |name|
+      path = DEFAULT_ENDPOINTS.fetch(name)
+      # Alternate so a machine that drifts during the run moves both numbers.
+      base = measure(base_lib, path, options, runner_path)
+      head = measure(head_lib, path, options, runner_path)
+      delta = (head - base) / base * 100
+
+      puts format("%-18s %10.2fus %10.2fus %9.1f%%", name, base, head, delta)
+    end
+  ensure
+    system("git", "-C", REPO, "worktree", "remove", "--force", base_tree,
+      out: File::NULL, err: File::NULL)
+  end
+end

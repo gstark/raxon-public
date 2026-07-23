@@ -4,7 +4,7 @@ require "spec_helper"
 
 RSpec.describe "Raxon::Router global blocks" do
   before do
-    Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
+    Raxon.reset_configuration!
   end
 
   describe "global before blocks" do

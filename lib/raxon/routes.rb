@@ -10,10 +10,31 @@ module Raxon
     # Allow headers.
     SUPPORTED_METHODS = %w[GET HEAD POST PUT PATCH DELETE OPTIONS].freeze
 
+    # Maps an already-uppercase method name to a frozen instance of itself.
+    # String#upcase allocates unconditionally, even when it changes nothing, and
+    # #find normalizes the method on every request. Rack hands us the method
+    # uppercase, so the lookup hits and the allocation disappears; anything else
+    # falls back to #upcase.
+    UPCASED_METHODS = (SUPPORTED_METHODS + %w[TRACE CONNECT]).to_h { |name| [name, name] }.freeze
+
+    # A template segment that is exactly one parameter, so the trie can index it
+    # as "anything here". A segment that merely contains a parameter —
+    # `{name}.json` — cannot be indexed by equality and is handled separately.
+    PURE_PARAM_SEGMENT = /\A\{[^{}\/]+\}\z/
+
+    # Dynamic-route count below which the index is not worth consulting. Around
+    # this many patterns, asking Mustermann each in turn costs about what
+    # splitting the path and collecting candidates costs; measured at 8 routes,
+    # narrowing was ~1.2us slower, and by 30 dynamic routes it is several times
+    # faster.
+    LINEAR_SCAN_LIMIT = 8
+
     # Initialize a new Routes collection.
     def initialize
       @entries_by_path = {}
       @dynamic_entries = []
+      @dynamic_root = new_index_node
+      @unindexable_entries = []
     end
 
     def each(&block)
@@ -61,7 +82,7 @@ module Raxon
     # @param path [String] Request path
     # @return [Hash, nil] Route data with endpoints array and params, or nil if not found
     def find(method, path)
-      method = method.upcase
+      method = UPCASED_METHODS[method] || method.upcase
 
       if (entry = @entries_by_path[path]) && (prepared = entry[:prepared][method])
         return prepared
@@ -105,6 +126,8 @@ module Raxon
     def reset
       @entries_by_path.clear
       @dynamic_entries.clear
+      @dynamic_root = new_index_node
+      @unindexable_entries.clear
     end
 
     private
@@ -121,7 +144,11 @@ module Raxon
           methods: {},
           prepared: {}
         }
-        @dynamic_entries << entry if entry[:dynamic]
+        if entry[:dynamic]
+          entry[:order] = @dynamic_entries.length
+          @dynamic_entries << entry
+          index_dynamic_entry(entry)
+        end
         entry
       end
     end
@@ -167,9 +194,13 @@ module Raxon
         endpoint = entry[:methods][method] || entry[:all]
         next unless endpoint
 
+        hierarchy = endpoint_hierarchy(entry[:path], method, endpoint)
+        effective = EffectiveEndpoint.new(endpoint, hierarchy)
+        endpoint.effective_endpoint = effective
         entry[:prepared][method] = {
           endpoint: endpoint,
-          endpoints: endpoint_hierarchy(entry[:path], method, endpoint)
+          endpoints: hierarchy,
+          effective_endpoint: effective
         }
       end
 
@@ -185,11 +216,94 @@ module Raxon
       get_endpoint = entry[:methods]["GET"]
       return unless get_endpoint
 
+      hierarchy = endpoint_hierarchy(entry[:path], "GET", get_endpoint)
+      effective = EffectiveEndpoint.new(get_endpoint, hierarchy)
+      get_endpoint.effective_endpoint = effective
       entry[:prepared]["HEAD"] = {
         endpoint: get_endpoint,
-        endpoints: endpoint_hierarchy(entry[:path], "GET", get_endpoint),
+        endpoints: hierarchy,
+        effective_endpoint: effective,
         head_from_get: true
       }
+    end
+
+    # Dynamic routes are matched by asking Mustermann, one pattern at a time,
+    # until one answers. That is linear in the number of dynamic routes, which
+    # is fine for the handful a benchmark declares and not fine for an
+    # application: fifty resources of eight routes each spend ~35us finding
+    # `/api/v1/x/{id}` and ~76us finding `/api/v1/x/{id}/archive`, more than the
+    # rest of the request put together.
+    #
+    # So patterns are indexed by their segments, and only the entries whose
+    # shape can match a given path are asked. The index narrows; it does not
+    # match. Mustermann still decides, and still extracts the params, so a
+    # candidate that reaches it is answered exactly as before.
+    #
+    # Candidates come back in registration order because that is the order the
+    # linear scan used, and the first pattern to match wins. Two patterns can
+    # both match one path — `/a/{b}/c` and `/a/x/{c}` — and which of them
+    # answers is behavior, not an implementation detail.
+    #
+    # @param path [String]
+    # @return [Array<Hash>] Entries whose shape admits this path
+    def dynamic_candidates(path)
+      # Narrowing is not free: it splits the path and builds an array to hold
+      # the result. Below a handful of patterns, asking all of them costs less
+      # than working out which to ask, so the scan stays. This is the same
+      # linear scan as before, on the same entries, in the same order.
+      return @dynamic_entries if @dynamic_entries.length <= LINEAR_SCAN_LIMIT
+
+      found = []
+      collect_candidates(@dynamic_root, path.split("/", -1), 0, found)
+      found.concat(@unindexable_entries) unless @unindexable_entries.empty?
+      # Static is walked before dynamic, so anything drawn from both branches
+      # arrives out of registration order. One candidate is the common case and
+      # needs no sorting.
+      found.sort_by! { |entry| entry[:order] } if found.length > 1
+      found
+    end
+
+    def collect_candidates(node, segments, depth, found)
+      if depth == segments.length
+        entries = node[:entries]
+        found.concat(entries) if entries
+        return
+      end
+
+      static = node[:static][segments[depth]]
+      collect_candidates(static, segments, depth + 1, found) if static
+
+      dynamic = node[:dynamic]
+      collect_candidates(dynamic, segments, depth + 1, found) if dynamic
+    end
+
+    def index_dynamic_entry(entry)
+      node = @dynamic_root
+
+      entry[:path].split("/", -1).each do |segment|
+        node = if !segment.include?("{")
+          node[:static][segment] ||= new_index_node
+        elsif PURE_PARAM_SEGMENT.match?(segment)
+          node[:dynamic] ||= new_index_node
+        else
+          # A segment like `{name}.json` matches by neither equality nor
+          # wildcard, so it cannot be placed. Rather than guess, it stays a
+          # candidate for every path and Mustermann rules on it as before.
+          @unindexable_entries << entry
+          return nil
+        end
+      end
+
+      (node[:entries] ||= []) << entry
+      sort_index_entries(node)
+    end
+
+    def sort_index_entries(node)
+      node[:entries].sort_by! { |entry| entry[:order] } if node[:entries].length > 1
+    end
+
+    def new_index_node
+      {static: {}, dynamic: nil, entries: nil}
     end
 
     def matching_entries(path)
@@ -197,7 +311,7 @@ module Raxon
       exact = @entries_by_path[path]
       entries << exact if exact
 
-      @dynamic_entries.each do |entry|
+      dynamic_candidates(path).each do |entry|
         entries << entry if !entry.equal?(exact) && entry[:mustermann].match(path)
       end
 
@@ -257,7 +371,7 @@ module Raxon
     end
 
     def find_pattern_candidate(method, path)
-      @dynamic_entries.each do |entry|
+      dynamic_candidates(path).each do |entry|
         endpoint = entry[:methods][method]
         next unless endpoint
 
@@ -269,7 +383,7 @@ module Raxon
     end
 
     def find_all_pattern_candidate(method, path)
-      @dynamic_entries.each do |entry|
+      dynamic_candidates(path).each do |entry|
         endpoint = entry[:all]
         next unless endpoint
 
@@ -285,7 +399,7 @@ module Raxon
     def find_head_fallback_candidate(method, path)
       return nil unless method == "HEAD"
 
-      @dynamic_entries.each do |entry|
+      dynamic_candidates(path).each do |entry|
         next unless entry[:methods]["GET"]
 
         match = entry[:mustermann].match(path)

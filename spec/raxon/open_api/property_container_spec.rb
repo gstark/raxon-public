@@ -26,6 +26,21 @@ RSpec.describe Raxon::OpenApi::PropertyContainer do
     expect(container.properties[:name].type).to eq("string")
   end
 
+  it "accepts a bare name with no options" do
+    container.property(:notes)
+
+    expect(container.properties[:notes]).to be_a(Raxon::OpenApi::Property)
+    expect(container.properties[:notes].type).to be_nil
+  end
+
+  it "yields a bare property for nested configuration" do
+    container.property(:address) do |address|
+      address.property(:street, type: :string)
+    end
+
+    expect(container.properties[:address].properties[:street].type).to eq("string")
+  end
+
   it "yields the created property for nested configuration" do
     container.property(:address, type: :object) do |address|
       address.property(:street, type: :string)

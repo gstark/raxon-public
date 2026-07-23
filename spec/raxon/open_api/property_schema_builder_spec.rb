@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "timeout"
 
 # Focused unit coverage for the shared OpenAPI -> Dry::Schema translation point.
 # Request and response validation both route through PropertySchemaBuilder, so the
@@ -36,7 +37,8 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder do
       "boolean" => :bool,
       "array" => :array,
       "object" => :hash,
-      "unknown" => :string
+      "unknown" => :string,
+      nil => :any
     }.each do |input, expected|
       it "maps #{input.inspect} to #{expected.inspect}" do
         expect(builder.dry_schema_type(input)).to eq(expected)
@@ -44,24 +46,46 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder do
     end
   end
 
-  describe "#map_type_to_dry" do
-    {
-      "string" => "params.string",
-      "datetime" => "params.string",
-      "date" => "params.string",
-      "uuid" => "params.string",
-      "email" => "params.string",
-      "number" => "params.float",
-      "integer" => "params.integer",
-      "boolean" => "params.bool",
-      "object" => "params.hash",
-      "array" => "params.array",
-      "file" => "params.any",
-      "unknown" => "params.string"
-    }.each do |input, expected|
-      it "maps #{input.inspect} to #{expected.inspect}" do
-        expect(builder.map_type_to_dry(input)).to eq(expected)
+  # An untyped property emits no `type` key (M-1), i.e. "any type". It used to
+  # fall through dry_schema_type's else branch to :string, so the document said
+  # "any" while the runtime silently demanded a string — the confusing-500 shape
+  # this suite exists to prevent.
+  describe "untyped properties" do
+    it "accepts any value type, matching the document" do
+      schema = schema_for(:notes, property(description: "no declared type"))
+
+      [42, "text", {nested: 1}, [1, 2], false, nil].each do |value|
+        expect(schema.call(notes: value).success?).to be(true), "rejected #{value.inspect}"
       end
+    end
+
+    it "still enforces a declared enum" do
+      schema = schema_for(:mode, property(enum: ["x", 1]))
+
+      expect(schema.call(mode: "x").success?).to be true
+      expect(schema.call(mode: 1).success?).to be true
+      expect(schema.call(mode: "nope").success?).to be false
+    end
+
+    it "enforces a declared enum on a nullable untyped property, and allows nil" do
+      schema = schema_for(:mode, property(enum: ["x", 1], nullable: true))
+
+      expect(schema.call(mode: nil).success?).to be true
+      expect(schema.call(mode: "x").success?).to be true
+      expect(schema.call(mode: "nope").success?).to be false
+    end
+
+    it "accepts any value when nullable with no other constraints" do
+      schema = schema_for(:notes, property(nullable: true))
+
+      expect(schema.call(notes: nil).success?).to be true
+      expect(schema.call(notes: 42).success?).to be true
+    end
+
+    it "still rejects a missing required untyped field" do
+      schema = schema_for(:notes, property(required: true))
+
+      expect(schema.call({}).success?).to be false
     end
   end
 
@@ -137,6 +161,57 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder do
 
       expect(schema.call(code: "abc").success?).to be false
       expect(schema.call(code: "ABC").success?).to be true
+    end
+
+    it "compiles the pattern with the configured per-match timeout" do
+      Raxon.configuration.regexp_timeout = 0.25
+
+      # Ruby raises Regexp::TimeoutError on any match that exceeds this, capping
+      # a ReDoS pattern's CPU cost on hostile input.
+      expect(builder.send(:compile_pattern, "^(a+)+$").timeout).to eq(0.25)
+    end
+
+    it "compiles the pattern without a timeout when regexp_timeout is nil" do
+      Raxon.configuration.regexp_timeout = nil
+
+      compiled = builder.send(:compile_pattern, '\A[A-Z]+\z')
+      expect(compiled.timeout).to be_nil
+
+      schema = schema_for(:code, property(type: :string, pattern: '\A[A-Z]+\z'))
+      expect(schema.call(code: "ABC").success?).to be true
+    end
+
+    it "rejects an oversized value on max_length without running the pattern" do
+      # dry-schema chains predicates with a short-circuiting AND in declaration
+      # order, so emitting max_size? before format? means a too-long value is
+      # rejected on length and the regexp never sees it. That ordering is the
+      # structural half of the ReDoS defense (the timeout is the other half),
+      # and it is silently lost if dry_constraints_for is ever reordered — hence
+      # this test.
+      #
+      # Timeout disabled so the only thing standing between this catastrophically
+      # backtracking pattern and a hung CPU is the ordering itself.
+      Raxon.configuration.regexp_timeout = nil
+      schema = schema_for(:code, property(type: :string, max_length: 10, pattern: "^(a+)+$"))
+
+      result = nil
+      expect {
+        Timeout.timeout(5) { result = schema.call(code: "#{"a" * 60}!") }
+      }.not_to raise_error
+
+      expect(result.success?).to be false
+      expect(result.errors.to_h[:code]).to eq(["size cannot be greater than 10"])
+    end
+
+    it "applies the pattern unanchored, matching OpenAPI semantics" do
+      # A declared pattern is a *search*, not a full-string match, on both the
+      # OpenAPI side and here — consistent, but easy to misread as anchored.
+      # Authors who want a whole-string match must anchor with \A and \z.
+      unanchored = schema_for(:code, property(type: :string, pattern: "[A-Z]+"))
+      anchored = schema_for(:code, property(type: :string, pattern: '\A[A-Z]+\z'))
+
+      expect(unanchored.call(code: "xxABCxx").success?).to be true
+      expect(anchored.call(code: "xxABCxx").success?).to be false
     end
   end
 

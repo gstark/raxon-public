@@ -3,7 +3,6 @@
 require "json"
 require "erb"
 require "fileutils"
-require "active_support/core_ext/hash"
 
 namespace :raxon do
   namespace :openapi do

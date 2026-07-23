@@ -40,6 +40,60 @@ RSpec.describe Raxon::Router do
 
       expect(status).not_to eq(413)
     end
+
+    it "rejects a malformed Content-Length when a limit is configured", load_routes: true do
+      Raxon.configuration.max_request_body_size = 1_000
+
+      env = Rack::MockRequest.env_for(
+        "/api/v1/test",
+        :method => "POST",
+        :input => "x" * 10,
+        "CONTENT_TYPE" => "application/json"
+      )
+      # A lie that String#to_i would happily truncate to a small number.
+      env["CONTENT_LENGTH"] = "10bytes"
+      status, = Raxon::Router.new.call(env)
+
+      expect(status).to eq(413)
+    end
+
+    it "rejects an over-limit body with no Content-Length mid-read", load_routes: true do
+      Raxon.configuration.max_request_body_size = 10
+
+      env = Rack::MockRequest.env_for(
+        "/api/v1/json_test",
+        :method => "POST",
+        :input => JSON.generate(message: "x" * 100),
+        "CONTENT_TYPE" => "application/json"
+      )
+      # Simulate a chunked request: no declared length for the early check to
+      # catch, so enforcement must happen while the body is read.
+      env.delete("CONTENT_LENGTH")
+      status, = Raxon::Router.new.call(env)
+
+      expect(status).to eq(413)
+    end
+
+    it "rejects an over-limit body streamed to the catchall", load_routes: true do
+      Raxon.configuration.max_request_body_size = 10
+      Raxon::RouteLoader.register_catchall do |endpoint|
+        endpoint.handler do |request, response|
+          request.params # forces the body to be read
+          response.ok ok: true
+        end
+      end
+
+      env = Rack::MockRequest.env_for(
+        "/no/such/route",
+        :method => "POST",
+        :input => JSON.generate(message: "x" * 100),
+        "CONTENT_TYPE" => "application/json"
+      )
+      env.delete("CONTENT_LENGTH")
+      status, = Raxon::Router.new.call(env)
+
+      expect(status).to eq(413)
+    end
   end
 
   describe "#call" do
@@ -831,5 +885,33 @@ RSpec.describe Raxon::Router, "debug logging" do
     env = Rack::MockRequest.env_for("/ping")
 
     expect { Raxon::Router.new.call(env) }.not_to output.to_stderr
+  end
+end
+
+RSpec.describe Raxon::Router, "mounted under a script name" do
+  # Routing has always matched on SCRIPT_NAME + PATH_INFO, so an app mounted at
+  # a prefix declares its routes including that prefix. Unmounted — every
+  # standalone app — PATH_INFO is the whole path, and the router uses it
+  # directly rather than allocating a string to concatenate an empty prefix.
+  it "routes on the full path when mounted at a prefix" do
+    define_route("routes/api/users/get.rb") do |endpoint|
+      endpoint.handler { |_request, response| response.ok mounted: true }
+    end
+
+    env = Rack::MockRequest.env_for("/users", "SCRIPT_NAME" => "/api")
+    status, _, body = Raxon::Router.new.call(env)
+
+    expect(status).to eq(200)
+    expect(JSON.parse(body.first)).to eq("mounted" => true)
+  end
+
+  it "does not match the unprefixed path when mounted" do
+    define_route("routes/api/users/get.rb") do |endpoint|
+      endpoint.handler { |_request, response| response.ok mounted: true }
+    end
+
+    status, = Raxon::Router.new.call(Rack::MockRequest.env_for("/users"))
+
+    expect(status).to eq(404)
   end
 end

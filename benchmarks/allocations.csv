@@ -1,4 +1,5 @@
 framework,endpoint,path,iterations,total_allocated_objects,allocated_objects_per_request,elapsed_seconds
-raxon,plaintext,/plaintext,50000,750006,15.00012,0.1572070000693202
-raxon,json,/json,50000,1850000,37.0,0.5309920001309365
-raxon,path_param,/users/123,50000,3900000,78.0,1.0940400001127273
+raxon,plaintext,/plaintext,50000,650006,13.00012,0.2761765089999244
+raxon,json,/json,50000,900000,18.0,0.3483467070000188
+raxon,path_param,/users/123,50000,2900000,58.0,1.3436030509983539
+raxon,validated_params,/search?limit=10&status=active&cursor=abc123,50000,4800003,96.00006,1.8353298750007525

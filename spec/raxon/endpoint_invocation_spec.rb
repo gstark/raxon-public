@@ -9,12 +9,13 @@ require "spec_helper"
 RSpec.describe Raxon::EndpointInvocation do
   # A request double standing in for Raxon::Request. endpoint_context returns nil
   # so blocks run via plain #call (no route-file context needed).
-  def fake_request(params: {}, json_parse_error: false, validation_errors: nil)
+  def fake_request(params: {}, json_parse_error: false, validation_errors: nil, validation_unprocessable: false)
     double(
       "request",
       params: params,
       json_parse_error: json_parse_error,
-      validation_errors: validation_errors
+      validation_errors: validation_errors,
+      validation_unprocessable?: validation_unprocessable
     ).tap { |r| allow(r).to receive(:endpoint_context).and_return(nil) }
   end
 
@@ -47,6 +48,24 @@ RSpec.describe Raxon::EndpointInvocation do
       expect(response.body).to eq(error: "Validation failed", details: {id: ["is missing"]})
       expect(ran).to be(false)
     end
+
+    it "returns 422 when the failure is a content rejection rather than a malformed request" do
+      ran = false
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.handler { |_req, _res, _meta| ran = true }
+
+      response = run(endpoint, request: fake_request(
+        validation_errors: {photo: ["must be one of the allowed file types: jpg"]},
+        validation_unprocessable: true
+      ))
+
+      expect(response.status_code).to eq(422)
+      expect(response.body).to eq(
+        error: "Validation failed",
+        details: {photo: ["must be one of the allowed file types: jpg"]}
+      )
+      expect(ran).to be(false)
+    end
   end
 
   describe "handler dispatch" do
@@ -68,6 +87,10 @@ RSpec.describe Raxon::EndpointInvocation do
   end
 
   describe "response validation" do
+    # Response validation is opt-in and off by default; these specs are about
+    # what it does once turned on.
+    before { Raxon.configure { |config| config.response_validation = :error_response } }
+
     it "rewrites a schema-violating response to 500 (error_response mode)" do
       endpoint = Raxon::OpenApi::Endpoint.new
       endpoint.response 200, type: :object do |resp|

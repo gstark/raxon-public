@@ -92,4 +92,57 @@ RSpec.describe Raxon::OpenApi::Parameter do
       expect(parameter.allowable_values).to be_nil
     end
   end
+
+  describe "in: validation" do
+    it "raises on an invalid location rather than emitting an invalid parameter" do
+      expect { described_class.new(:id, type: :string, in: :qeury) }
+        .to raise_error(ArgumentError, /invalid `in:` location.*qeury.*Valid locations: query, header, path, cookie/m)
+    end
+
+    it "accepts each valid OpenAPI location" do
+      %i[query header path cookie].each do |location|
+        expect { described_class.new(:id, type: :string, in: location) }.not_to raise_error
+      end
+    end
+  end
+
+  describe "body-only type rejection" do
+    # A :file parameter used to half-work: an in: :query parameter is validated
+    # against the lenient source merge (which includes form params), so a real
+    # upload reached it, but neither FileUploadValidator nor RequestBodyCoercer
+    # consults parameters — the handler got a raw Rack hash and a non-file value
+    # passed validation. OpenAPI cannot describe binary in a parameter either.
+    it "rejects type: :file, pointing at the request-body form" do
+      expect { described_class.new(:photo, type: :file) }
+        .to raise_error(Raxon::OpenApi::Error, /type: :file is not valid for a parameter \(photo\)/)
+    end
+
+    it "rejects type: :multipart" do
+      expect { described_class.new(:upload, type: :multipart) }
+        .to raise_error(Raxon::OpenApi::Error, /type: :multipart is not valid for a parameter/)
+    end
+
+    it "rejects a body-only type inside a union" do
+      expect { described_class.new(:photo, type: [:string, :file]) }
+        .to raise_error(Raxon::OpenApi::Error, /type: :file is not valid for a parameter/)
+    end
+
+    it "rejects it in every location, not just query" do
+      %i[query header path cookie].each do |location|
+        expect { described_class.new(:photo, type: :file, in: location) }
+          .to raise_error(Raxon::OpenApi::Error, /not valid for a parameter/)
+      end
+    end
+
+    it "suggests a request body declaration using the parameter's own name" do
+      expect { described_class.new(:avatar, type: :file) }
+        .to raise_error(Raxon::OpenApi::Error, /body\.property :avatar, type: :file/)
+    end
+
+    it "still allows :file on a request body property" do
+      body = Raxon::OpenApi::RequestBody.new(type: :multipart)
+      expect { body.property :photo, type: :file }.not_to raise_error
+      expect(body.properties[:photo].type).to eq("file")
+    end
+  end
 end

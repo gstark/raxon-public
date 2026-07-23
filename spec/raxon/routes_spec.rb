@@ -601,3 +601,132 @@ RSpec.describe Raxon::Routes, "unusual registrations" do
     expect(routes.find("GET", "/files/")[:params]).to eq({})
   end
 end
+
+# Above LINEAR_SCAN_LIMIT dynamic routes, lookup stops asking every pattern and
+# consults a segment index first. The index only narrows the candidates —
+# Mustermann still matches and still extracts params — so these assert that the
+# answers are the ones the linear scan gave, on a route table large enough to
+# take the indexed path.
+RSpec.describe Raxon::Routes, "with more dynamic routes than the linear scan limit" do
+  subject(:routes) { described_class.new }
+
+  # Ten resources of three dynamic routes each: comfortably over the limit.
+  def register_resources(count = 10)
+    endpoints = {}
+    count.times do |i|
+      name = "resource#{i}"
+      ["/api/#{name}/{id}", "/api/#{name}/{id}/archive", "/api/#{name}/{id}/copy"].each do |template|
+        endpoints[template] = Raxon::OpenApi::Endpoint.new
+        routes.register("GET", template, endpoints[template])
+      end
+    end
+    endpoints
+  end
+
+  it "matches a dynamic route and extracts its params" do
+    register_resources
+
+    data = routes.find("GET", "/api/resource7/42")
+
+    expect(data).not_to be_nil
+    expect(data[:params]).to eq(id: "42")
+  end
+
+  it "matches a deeper dynamic route" do
+    register_resources
+
+    expect(routes.find("GET", "/api/resource3/9/archive")[:params]).to eq(id: "9")
+  end
+
+  it "returns nil for a path no pattern admits" do
+    register_resources
+
+    expect(routes.find("GET", "/api/resource3/9/nope")).to be_nil
+    expect(routes.find("GET", "/api/nosuch/9")).to be_nil
+  end
+
+  it "still answers static paths" do
+    register_resources
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/api/health", endpoint)
+
+    expect(routes.find("GET", "/api/health")[:endpoint]).to equal(endpoint)
+  end
+
+  # Two patterns can admit one path. Which answers is registration order, and
+  # the index has to preserve it rather than preferring the more specific.
+  it "keeps registration order when two patterns both match" do
+    register_resources
+    general = Raxon::OpenApi::Endpoint.new
+    specific = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/api/{resource}/{id}/settings", general)
+    routes.register("GET", "/api/resource1/{id}/settings", specific)
+
+    expect(routes.find("GET", "/api/resource1/5/settings")[:endpoint]).to equal(general)
+  end
+
+  # A segment that merely contains a parameter cannot be indexed by equality,
+  # so it stays a candidate for every path and Mustermann rules on it.
+  it "matches a pattern whose segment is only partly a parameter" do
+    register_resources
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/files/{name}.json", endpoint)
+
+    expect(routes.find("GET", "/files/report.json")[:params]).to eq(name: "report")
+    expect(routes.find("GET", "/files/report.txt")).to be_nil
+  end
+
+  it "reports allowed methods for a dynamic path" do
+    register_resources
+    routes.register("DELETE", "/api/resource2/{id}", Raxon::OpenApi::Endpoint.new)
+
+    expect(routes.allowed_methods("/api/resource2/3")).to eq(%w[GET HEAD DELETE OPTIONS])
+  end
+
+  it "serves HEAD from a GET route" do
+    register_resources
+
+    data = routes.find("HEAD", "/api/resource4/8")
+
+    expect(data[:head_from_get]).to be(true)
+    expect(data[:params]).to eq(id: "8")
+  end
+
+  it "matches an all-methods route" do
+    register_resources
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/api/catchall/{id}", endpoint)
+
+    expect(routes.find("PATCH", "/api/catchall/1")[:endpoint]).to equal(endpoint)
+  end
+
+  # The path walks to a node that exists only as a prefix of a longer template,
+  # so there is nothing registered at that depth to answer with.
+  it "returns nil for a path that is only a prefix of a registered pattern" do
+    register_resources
+    routes.register("GET", "/api/deep/{a}/{b}/{c}", Raxon::OpenApi::Endpoint.new)
+
+    expect(routes.find("GET", "/api/deep/1")).to be_nil
+    expect(routes.find("GET", "/api/deep/1/2/3")).not_to be_nil
+  end
+
+  # Two templates with the same shape land on the same node, and the one
+  # registered first still answers.
+  it "keeps registration order between two patterns of identical shape" do
+    register_resources
+    first = Raxon::OpenApi::Endpoint.new
+    second = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/api/shape/{id}", first)
+    routes.register("POST", "/api/shape/{slug}", second)
+
+    expect(routes.find("GET", "/api/shape/7")[:endpoint]).to equal(first)
+    expect(routes.find("POST", "/api/shape/7")[:endpoint]).to equal(second)
+  end
+
+  it "forgets the index on reset" do
+    register_resources
+    routes.reset
+
+    expect(routes.find("GET", "/api/resource7/42")).to be_nil
+  end
+end

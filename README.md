@@ -2,6 +2,8 @@
 
 A lightweight, Rack 3 compatible JSON API framework for Ruby with file-based routing, automatic OpenAPI documentation generation, and built-in request/response validation.
 
+> **Working with an AI agent?** Point it at [llms.txt](llms.txt) — a condensed map of the route-file contract, the DSL, and the verify loop. `raxon new` also writes an `AGENTS.md` into the generated project.
+
 ## Features
 
 - ✨ **File-Based Routing** - Routes automatically mapped from file paths (`routes/api/v1/users/get.rb` → `GET /api/v1/users`)
@@ -60,6 +62,93 @@ Raxon.route do
 end
 ```
 
+**The two block forms are equivalent.** A zero-arity block (`Raxon.route do`) is
+evaluated against the endpoint, so `description`/`response`/`handler` are called
+bare. A one-arity block (`Raxon.route do |endpoint|`) receives the endpoint and
+you call `endpoint.description`, `endpoint.response`, and so on. Use whichever
+reads better; this README uses both. Likewise, handler, before, after, and
+metadata blocks all receive `(request, response, metadata)` — trailing arguments
+may be omitted, so `do |request, response|` and `do |request, response, metadata|`
+are both valid.
+
+For the common JSON success path, use the opt-in `handle` form. Its return
+value becomes the response body; Raxon chooses the sole declared 2xx status
+(or `200` when none is declared). `handler` remains the full-control API and
+continues to ignore its Ruby return value:
+
+```ruby
+Raxon.route do
+  response 201, type: :object do
+    property :id, type: :integer
+  end
+
+  handle do |request|
+    {id: create_widget(request.params).id}
+  end
+end
+```
+
+When an operation declares more than one 2xx response, return an explicit
+outcome or use `handler`:
+
+```ruby
+handle do |request|
+  Raxon::Outcome.accepted({job_id: enqueue(request.params)})
+end
+```
+
+`handle` can still receive `response` for a terminal exceptional response. The
+success path stays a returned value; redirects, streams, conditional responses,
+and other unusual HTTP behavior should continue to use `handler`.
+
+Before:
+
+```ruby
+handler do |request, response|
+  game = StandingGame.find_by(id: request.params[:id])
+  manageable = StandingGames::ManageableScope.find_game(
+    organization: Current.organization, account: Current.account, id: request.params[:id]
+  ).present?
+  participant = Current.account.present? && game&.participant_projections&.exists?(
+    account: Current.account, active: true
+  )
+
+  if game.nil? || (!manageable && !participant)
+    response.code = :not_found
+    response.body = {error: "Standing game not found"}
+    response.halt
+  end
+
+  response.body = {leaderboard: game.score_projections.includes(:account, :organization).order(:rank, :account_id).map(&serialize_leaderboard)}
+end
+```
+
+After:
+
+```ruby
+response 200, type: :object do
+  property :leaderboard, type: :array
+end
+
+not_found_response
+
+handle do |request, response|
+  game = StandingGame.find_by(id: request.params[:id])
+  manageable = StandingGames::ManageableScope.find_game(
+    organization: Current.organization, account: Current.account, id: request.params[:id]
+  ).present?
+  participant = Current.account.present? && game&.participant_projections&.exists?(
+    account: Current.account, active: true
+  )
+
+  if game.nil? || (!manageable && !participant)
+    response.halt(code: :not_found, body: {error: "Standing game not found"})
+  end
+
+  { leaderboard: game.score_projections.includes(:account, :organization).order(:rank, :account_id).map(&serialize_leaderboard) }
+end
+```
+
 ### Running the Server
 
 ```bash
@@ -83,13 +172,13 @@ curl http://localhost:9292/api/v1/ping
 
 Routes are automatically registered based on file paths and names:
 
-| File Path                              | HTTP Method | Route                |
-| -------------------------------------- | ----------- | -------------------- |
-| `routes/api/v1/users/get.rb`           | GET         | `/api/v1/users`      |
-| `routes/api/v1/users/post.rb`          | POST        | `/api/v1/users`      |
-| `routes/api/v1/users/__id__/get.rb`    | GET         | `/api/v1/users/{id}` |
-| `routes/api/v1/users/__id__/put.rb`    | PUT         | `/api/v1/users/{id}` |
-| `routes/api/v1/all.rb`                 | ALL         | `/api/v1/*`          |
+| File Path                           | HTTP Method | Route                |
+| ----------------------------------- | ----------- | -------------------- |
+| `routes/api/v1/users/get.rb`        | GET         | `/api/v1/users`      |
+| `routes/api/v1/users/post.rb`       | POST        | `/api/v1/users`      |
+| `routes/api/v1/users/__id__/get.rb` | GET         | `/api/v1/users/{id}` |
+| `routes/api/v1/users/__id__/put.rb` | PUT         | `/api/v1/users/{id}` |
+| `routes/api/v1/all.rb`              | ALL         | `/api/v1/*`          |
 
 **Supported HTTP methods:** `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `all`
 
@@ -120,6 +209,10 @@ end
 ```
 
 See [Path Parameters Documentation](docs/path_parameters.md) for more details.
+
+Every dynamic filename segment is also a required OpenAPI path parameter and
+is validated as a string by default. Add `path_param` only when refining that
+default (for example, an integer type, enum, pattern, or description).
 
 ### Request Handling
 
@@ -237,12 +330,14 @@ module Raxon::HandlerHelpers
 end
 
 # Use in any endpoint
-endpoint.handler do |request, response|
-  authenticate!(request)  # Helper method available directly
-  user = current_user(request)
+Raxon.route do |endpoint|
+  endpoint.handler do |request, response|
+    authenticate!(request)  # Helper method available directly
+    user = current_user(request)
 
-  response.code = :ok
-  response.body = { user: user }
+    response.code = :ok
+    response.body = { user: user }
+  end
 end
 ```
 
@@ -293,7 +388,7 @@ end
 Before hooks can be defined at parent route levels and automatically apply to all child routes:
 
 ```ruby
-# routes/api/v1/before.rb - Applies to all /api/v1/* routes
+# routes/api/v1/all.rb - Applies to all /api/v1/* routes
 Raxon.route do |endpoint|
   endpoint.before do |request, response|
     authenticate!(request)  # All v1 endpoints require auth
@@ -608,15 +703,19 @@ Create a template file with the same path but `.html.erb` extension:
 ```ruby
 # JSON API endpoint
 # routes/api/v1/users/get.rb
-endpoint.handler do |request, response|
-  response.code = :ok
-  response.body = { users: fetch_users }
+Raxon.route do |endpoint|
+  endpoint.handler do |request, response|
+    response.code = :ok
+    response.body = { users: fetch_users }
+  end
 end
 
 # HTML page
 # routes/dashboard/get.rb
-endpoint.handler do |_request, response|
-  response.html_body = response.html(users: fetch_users)
+Raxon.route do |endpoint|
+  endpoint.handler do |_request, response|
+    response.html_body = response.html(users: fetch_users)
+  end
 end
 ```
 
@@ -642,19 +741,41 @@ end
 
 The block receives the unmatched `Raxon::Request` and a `Raxon::Response` preloaded with the default 404; change the body, headers, or status as needed.
 
+### Mapping Exceptions to Responses
+
+Register `rescue_from` handlers instead of wrapping every handler in `begin`/`rescue`. An exception raised anywhere in the lifecycle (metadata, before, handler, after) is matched against the registered classes from most specific to least specific, and the first match builds the response:
+
+```ruby
+Raxon.configure do |config|
+  config.rescue_from(ActiveRecord::RecordNotFound) do |exception, request, response, metadata|
+    response.code = :not_found
+    response.body = {error: "Resource not found"}
+  end
+
+  config.rescue_from(MyApp::Forbidden) do |exception, request, response, metadata|
+    response.code = :forbidden
+    response.body = {error: exception.message}
+  end
+end
+```
+
+The block receives `(exception, request, response, metadata)`; trailing arguments may be omitted. Unhandled exceptions fall through to `on_error` and the standard 500 response.
+
 ### Conditional GET (ETag / Last-Modified)
 
 Handlers can make responses cacheable and skip work when the client is already up to date. Both helpers set the header and — for GET/HEAD requests — halt with `304 Not Modified` when the request's `If-None-Match` / `If-Modified-Since` indicates freshness:
 
 ```ruby
-endpoint.handler do |request, response|
-  user = find_user(request.params[:id])
+Raxon.route do |endpoint|
+  endpoint.handler do |request, response|
+    user = find_user(request.params[:id])
 
-  response.etag user.cache_key          # weak ETag (W/"...") by default
-  response.last_modified user.updated_at
+    response.etag user.cache_key          # weak ETag (W/"...") by default
+    response.last_modified user.updated_at
 
-  # Only reached when the client's copy is stale
-  response.ok user.as_json
+    # Only reached when the client's copy is stale
+    response.ok user.as_json
+  end
 end
 ```
 
@@ -720,6 +841,23 @@ endpoint.body type: :object, description: "User data", required: true do |body|
 end
 ```
 
+`type:` is optional. `property :notes` declares an untyped property — no `type`
+key in the generated schema (OpenAPI's "any type") and no type constraint at
+validation time, so any JSON value passes. Other options still apply: an `enum:`
+on an untyped property is enforced. Declare a type whenever you have one; the
+untyped form is for genuinely free-form values.
+
+A `pattern:` is a **search, not a full-string match**, matching OpenAPI's
+semantics — `pattern: "[A-Z]+"` accepts `"xxABCxx"`. Anchor with `\A` and `\z`
+when you mean the whole value. Pair `pattern:` with `max_length:` on anything
+attacker-supplied: Raxon checks length first, so an oversized value is rejected
+without the regexp running against it at all. See [Security](#security).
+
+```ruby
+body.property :metadata            # any JSON value
+body.property :mode, enum: %w[a b] # any value, but must be "a" or "b"
+```
+
 ### File Uploads
 
 Handle file uploads by declaring properties with `type: :file`. Raxon automatically wraps Rack multipart hashes into `Raxon::UploadedFile` objects:
@@ -742,6 +880,21 @@ end
 ```
 
 `Raxon::UploadedFile` duck-types `ActionDispatch::Http::UploadedFile`, so downstream code (ActiveStorage, image processing libraries) works without changes.
+
+Declare size and extension limits in the schema and they are enforced before your handler runs:
+
+```ruby
+endpoint.body type: :multipart, max_total_size: 20 * 1024 * 1024 do |body|
+  body.property :avatar, type: :file, required: true,
+    max_bytes: 2 * 1024 * 1024,
+    content_types: %w[image/jpeg image/png],
+    allowed_extensions: %w[jpg jpeg png]
+end
+```
+
+`max_bytes` (or the compatible `max_size`) caps one upload, `max_total_size` caps every upload in the request combined, `content_types` compares the client-claimed MIME type after normalizing case and parameters, and `allowed_extensions` restricts the filename extension. Size violations answer `413`, rejected type/extension constraints answer `422`, and an ordinary malformed request stays `400`. Errors are always reported together in `details`; only the status differs.
+
+> `allowed_extensions` matches the client-supplied filename, which proves nothing about the bytes. It narrows what you accept — it does not replace validating content before use. See [Security](#security).
 
 See [File Uploads Documentation](docs/file_uploads.md) for more details.
 
@@ -772,20 +925,55 @@ endpoint.error_response 500
 
 These generate object response schemas with a required `error` string and, where appropriate, optional `details` object.
 
-Response validation failures are configurable:
+Response validation checks each response body against the schema declared for its
+status code. It is **opt-in and off by default in every environment**: it is the
+most expensive thing Raxon does per request (roughly 60% of the cost of a small
+JSON response), and a body that has drifted from its declared schema still
+answers the request correctly.
+
+Responses that use a registered OpenAPI component through `as:` or `of:` are
+validated too; they no longer need duplicate inline properties.
+
+### Representations
+
+Register a representation once to connect an OpenAPI component and serializer,
+then use `represents` with a return-value handler. The built-in adapter supports
+Alba resources and converts them to Ruby data before validation and JSON encoding:
+
+```ruby
+Raxon::OpenApi::DSL.from_resource(:Tag, TagResource, Tag)
+Raxon.register_representation(:Tag, TagResource)
+
+Raxon.route do
+  represents TagResource, collection: true
+
+  handle do
+    Tag.order(:name)
+  end
+end
+```
+
+For another serializer, pass an adapter responding to
+`call(resource, value, collection:, params:)` to `register_representation`.
+
+Turn it on where the cost buys something — typically development and test, where
+a mismatch is actionable:
 
 ```ruby
 Raxon.configure do |config|
-  config.response_validation = :error_response # default outside production
-  config.response_validation = :log            # default in production
-  config.response_validation = :raise
-  config.response_validation = false
+  config.response_validation = :error_response # 500 with the validation errors
+  config.response_validation = :raise          # Raxon::ResponseValidationError
+  config.response_validation = :log            # warn, answer normally
+  config.response_validation = false           # default: skip
   config.expose_validation_details = false     # default in production
 end
+```
 
-# Per endpoint override
-endpoint.validate_response false
-endpoint.validate_response true
+Or per endpoint, which works regardless of the global setting:
+
+```ruby
+endpoint.validate_response true   # validate even when globally off
+endpoint.validate_response false  # skip even when globally on
 ```
 
 ## OpenAPI Documentation
@@ -795,7 +983,7 @@ endpoint.validate_response true
 Generate the OpenAPI specification from your route definitions:
 
 ```bash
-bundle exec rake openapi:generate
+bundle exec rake raxon:openapi:generate
 ```
 
 This creates:
@@ -1009,7 +1197,7 @@ Two things Sequel's schema parsing cannot provide, compared to ActiveRecord intr
 - **Column comments** are not exposed, so property descriptions default to `""` — declare `description:` in the component block where it matters.
 - **Enums** cannot be derived (no model validators) — declare `allowable_values:` in the block.
 
-If your app runs ROM *alongside* ActiveRecord (e.g. via `sequel-activerecord_connection`), the ActiveRecord adapter is detected first and introspects the same tables through the shared connection — `from_table` works identically, and column comments come back.
+If your app runs ROM _alongside_ ActiveRecord (e.g. via `sequel-activerecord_connection`), the ActiveRecord adapter is detected first and introspects the same tables through the shared connection — `from_table` works identically, and column comments come back.
 
 ### Custom Schema Adapters
 
@@ -1071,7 +1259,7 @@ end
 
 **Configuration options:**
 
-- `root` - Root directory of the application as a Pathname (required, raises error if not set when accessed via `Raxon.root`)
+- `root` - Root directory of the application as a Pathname (default: `nil`). Optional — set it only if you or a helper call `Raxon.root`, which raises when it is unset.
 - `routes_directory` / `routes_directories` - Directory or array of directories containing route files (default: `"routes"`). Multiple directories are unioned together, and duplicate method/path endpoints raise `Raxon::Error`.
 - `helpers_path` - Directory for handler helper modules (default: `nil`)
 - `on_error` - Callback proc for error handling (receives error and Rack env)
@@ -1082,17 +1270,37 @@ end
 - `openapi_type_extensions` - Hash mapping DSL type names to specification-extension hashes applied to every schema of that type, e.g. `{datetime: {"x-ts-type" => "Dayjs"}}` (default: `{}`). See [Specification Extensions](#specification-extensions).
 - `logger` - Application logger (default: `nil`). When set, `Raxon::Server` logs every request through `Rack::CommonLogger` and `Raxon::ErrorHandler` (when used) logs unhandled exceptions to it.
 - `not_found` - Block customizing the 404 response for unmatched requests (see [HTTP Semantics](#http-semantics))
+- `rescue_from(ExceptionClass) { |exception, request, response, metadata| ... }` - Map a domain exception to a response (see [Mapping Exceptions to Responses](#mapping-exceptions-to-responses))
 - `reload_routes` - Route hot reloading: `nil` (default) enables it in development only; `true`/`false` force it on or off (see [Hot Reloading](#hot-reloading))
 - `filter_parameters` - Array of name fragments (strings/symbols) or `Regexp`s whose values are redacted from instrumentation/APM payloads. Defaults to common secret names (`password`, `token`, `secret`, `api_key`, `authorization`, `cookie`, `access_token`, `refresh_token`, …). Add your app's sensitive field names here.
-- `trust_proxy_headers` - Whether `request.remote_ip` may honor the client-supplied `X-Forwarded-For` / `X-Real-IP` headers (default: `false`). Leave `false` unless Raxon runs behind a reverse proxy you control that overwrites these headers — otherwise any client can spoof its IP. See [Security](#security).
-- `max_request_body_size` - Reject requests whose `Content-Length` exceeds this many bytes with `413 Payload Too Large`, before the body is read into memory (default: `nil`, no limit). This is a cheap first guard; for untrusted traffic also cap body size at your proxy/load balancer.
+- `trusted_proxies` - Reverse proxies whose `X-Forwarded-For` entries may be trusted, as an array of IP/CIDR strings (or `IPAddr` objects), e.g. `["10.0.0.0/8"]` (default: `[]`, trust nothing). When set, `request.remote_ip` walks the forwarding chain from the right, discards these trusted hops, and returns the first address that is not — so a client cannot spoof its IP. Leave empty unless a proxy fronts the app. See [Security](#security).
+- `max_request_body_size` - Reject requests larger than this many bytes with `413 Payload Too Large` (default: `10 * 1024 * 1024`, i.e. 10 MB; `nil` disables the check). Enforced both from `Content-Length` and while the body is read, so a chunked or mis-declared length cannot bypass it. Raise it for large uploads.
+- `path_parameter_defaults` - Optional callable receiving `(name, path)` and returning path-parameter options for filename-derived segments. Defaults to required strings; a local `path_param` always wins.
+- `validation_error_profile(name, status:, &body)` - Register a named request-validation response contract. Apply it with `validation_profile :name` in an `all.rb` or route; the optional body block receives `(message, details)`.
 - `schema_adapter` - Schema introspection source for `from_resource`/`from_table` (default: `nil`, auto-detects ActiveRecord then Sequel). Set to a custom adapter object to introspect another source (see [Database Integration](#database-integration)).
+- `regexp_timeout` - Per-match timeout (seconds) for the regexps Raxon compiles from schema `pattern:` constraints and `filter_parameters` (default: `1.0`; `nil` disables). A backtracking-heavy pattern raises `Regexp::TimeoutError` instead of pinning a CPU on hostile input (ReDoS). Scoped to Raxon's regexps — it does not change the host app's global `Regexp.timeout`. See [Security](#security).
+- `wrap_error_handler` - Whether `Raxon::Server` automatically wraps the router in `Raxon::ErrorHandler` (default: `true`) so an unhandled exception returns a clean JSON 500 instead of leaking to the app server's default page. Skipped automatically if you add an `ErrorHandler` yourself with `use`. Set `false` to opt out (e.g. when a host framework handles errors). See [Security](#security).
+
+For example, make every filename-derived `id` parameter an integer while
+leaving other dynamic segments as strings:
+
+```ruby
+Raxon.configure do |config|
+  config.path_parameter_defaults = lambda do |name, _path|
+    name == :id ? {type: :integer} : {type: :string}
+  end
+end
+```
+
+This affects routes such as `routes/orders/__id__/get.rb`. A local
+`path_param :id, type: :string` still wins, which is useful for routes that
+accept values such as `"new"` or UUIDs.
 
 ### Security
 
 Raxon is an unopinionated micro-framework: it gives you the primitives but does not silently add protections, so a few things are your responsibility. The defaults are chosen to fail safe.
 
-- **Client IP** — `request.remote_ip` returns the non-forgeable connection peer by default. Only set `trust_proxy_headers = true` when a trusted proxy overwrites the forwarding headers; otherwise `X-Forwarded-For` is attacker-controlled and must not be used for rate limiting, allowlists, or audit logs.
+- **Client IP** — `request.remote_ip` returns the non-forgeable connection peer by default. Set `trusted_proxies` to your proxy IP/CIDRs to honor `X-Forwarded-For`; `remote_ip` then walks the chain from the right past those trusted hops. Never trust the leftmost `X-Forwarded-For` entry — it is attacker-controlled and must not be used for rate limiting, allowlists, or audit logs.
 - **Secrets in telemetry** — the Rails-compatible instrumentation payload is scrubbed via `filter_parameters` before it reaches APM tools. Extend the list with any sensitive fields specific to your API.
 - **Request size** — set `max_request_body_size` (and a proxy-level limit) to bound memory use from large bodies.
 - **HTML output** — `response.html`/`.html_body` render templates with Erubi and **escape `<%= %>` by default**; use `<%== %>` only for values you have already sanitized.
@@ -1332,7 +1540,9 @@ end
 
 In the development environment, route files reload automatically — edit a route, its `.html.erb` template, or a helper under `helpers_path`, and the next request serves the new code. No server restart needed.
 
-Raxon watches the configured routes directories (and `helpers_path`) and performs a full route reload when any watched file is added, changed, or removed. Programmatic boot state survives: the catchall endpoint, OpenAPI components, security schemes, and configuration blocks are all preserved, and the generated OpenAPI document does not accumulate duplicates. A syntax error in a changed file surfaces on the request that triggered the reload; fix the file and the next request recovers.
+Raxon watches the configured routes directories (and `helpers_path`) and performs a full route reload when any watched file is added, changed, or removed. Programmatic boot state survives: the catchall endpoint, OpenAPI components, security schemes, and configuration blocks are all preserved, and the generated OpenAPI document does not accumulate duplicates.
+
+The rebuilt route table is swapped in atomically, so requests arriving during a reload are served by the previous table rather than a half-built one. A syntax error in a changed file surfaces on the request that triggered the reload, and the previously working routes keep serving in the meantime; fix the file and the next request recovers.
 
 Reloading is on only when `Raxon.env` is `development`. Override in either direction:
 
@@ -1393,7 +1603,7 @@ bundle exec raxon generate route api/v1/users get post
 bundle exec raxon generate route api/v1/users/__id__ get
 ```
 
-Each generated file contains a `Raxon.route` block with a description stub, `path_param` declarations for any parameter segments, a 200 response schema stub, and a handler. Existing files are never overwritten.
+Each generated file contains a `Raxon.route` block with a description stub, a 200 response schema stub, and a handler. Dynamic filename segments already generate path parameters; add `path_param` only to refine their default type or documentation. Existing files are never overwritten.
 
 ### Viewing Routes
 
@@ -1404,10 +1614,10 @@ Display all registered routes using the CLI or rake task:
 bundle exec raxon routes
 
 # Or using rake task
-bundle exec rake routes
+bundle exec rake raxon:routes
 
 # Show routes from custom directory
-ROUTES_DIR=routes bundle exec raxon routes
+RAXON_ROUTES_DIR=routes bundle exec raxon routes
 ```
 
 **Output format:**
@@ -1531,6 +1741,19 @@ run server
 
 When a request doesn't match any Raxon route, it's forwarded to the fallback app. If no fallback is configured, unmatched routes return 404.
 
+Use `Raxon::Mount` when Raxon must selectively dispatch inside an existing Rack
+stack. It calls the fallback directly for unmatched requests, leaving its env
+and exception behavior untouched. The literal path is attempted before a suffix
+candidate, so a real `.json` route wins over normalization:
+
+```ruby
+raxon = Raxon::Server.new
+run Raxon::Mount.new(Rails.application, app: raxon, suffixes: {".json" => "json"})
+```
+
+For a suffix-normalized match, Raxon receives `raxon.original_path` and
+`raxon.format` in `request.rack_request.env`.
+
 ### Custom Middleware
 
 Create custom middleware:
@@ -1647,7 +1870,7 @@ Built with:
 ## Support
 
 - 📚 [API Documentation](doc/apidoc/api.html)
-- 🐛 [Issue Tracker](https://github.com/yourusername/api/issues)
+- 🐛 [Issue Tracker](https://github.com/gstark/raxon/issues)
 - 💬 Questions? Open an issue or discussion
 
 ---

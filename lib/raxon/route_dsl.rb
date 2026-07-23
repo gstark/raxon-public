@@ -17,7 +17,7 @@ module Raxon
     #   response 200, type: :object do
     #     property :success, type: :boolean
     #   end
-    def response(status, options, &block)
+    def response(status, options = {}, &block)
       @endpoint.response(status, options, &wrap_nested_block(block))
     end
 
@@ -75,7 +75,7 @@ module Raxon
         @target = target
       end
 
-      def property(name, options, &block)
+      def property(name, options = {}, &block)
         @target.property(name, options, &wrap_nested_block(block))
       end
 

@@ -10,8 +10,20 @@ APP_DIR = File.join(ROOT, "apps", "raxon")
 DEFAULT_ENDPOINTS = {
   "plaintext" => "/plaintext",
   "json" => "/json",
-  "path_param" => "/users/123"
+  "path_param" => "/users/123",
+  # Exercises the dry-schema validation path: /users/123 declares a single plain
+  # string parameter and so takes the PlainStringSchema fast path, which would
+  # otherwise leave request validation unmeasured.
+  "validated_params" => "/search?limit=10&status=active&cursor=abc123"
 }.freeze
+
+# Benchmark the framework as it is deployed, not as it is developed. In
+# development Raxon defaults to hot reloading, which allocates a snapshot of
+# every route file's mtime on every request. Set unconditionally, and before
+# Raxon is loaded, because RAXON_ENV wins over RACK_ENV and either one inherited
+# from the caller's shell would otherwise decide what gets measured.
+ENV["RAXON_ENV"] = "production"
+ENV["RACK_ENV"] = "production"
 
 ENV["BUNDLE_GEMFILE"] ||= File.join(ROOT, "Gemfile")
 require "bundler/setup"
@@ -70,6 +82,12 @@ end
 
 Raxon.configure do |config|
   config.routes_directory = File.join(APP_DIR, "routes")
+end
+
+# The env vars above should have settled this, but a benchmark that quietly
+# measures the wrong thing is worse than one that refuses to run.
+if Raxon.configuration.reload_routes?
+  abort "route reloading is on; this would count development-mode reloader allocations, not request handling"
 end
 
 Raxon::RouteLoader.reset!

@@ -83,4 +83,21 @@ RSpec.describe Raxon::OpenApi::Property do
       expect { |b| property.property(:nested, type: :string, &b) }.to yield_with_args(an_instance_of(Raxon::OpenApi::Property))
     end
   end
+
+  describe "type validation" do
+    it "rejects an unknown type, listing the known ones" do
+      expect { described_class.new(type: :strng) }
+        .to raise_error(Raxon::OpenApi::Error, /Unknown type :strng\. Known types: string, number/)
+    end
+
+    it "rejects an unknown member of a union type" do
+      expect { described_class.new(type: [:string, :nope]) }
+        .to raise_error(Raxon::OpenApi::Error, /Unknown type :nope/)
+    end
+
+    it "accepts the datetime aliases" do
+      expect { described_class.new(type: "Dayjs") }.not_to raise_error
+      expect { described_class.new(type: :date_time) }.not_to raise_error
+    end
+  end
 end

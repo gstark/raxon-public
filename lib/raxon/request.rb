@@ -16,6 +16,14 @@ module Raxon
   class Request
     attr_reader :rack_request, :endpoint, :validation_errors, :json_parse_error
 
+    # Whether a validation failure was a content rejection (422) rather than a
+    # malformed request (400). Only meaningful when validation_errors is set.
+    #
+    # @return [Boolean]
+    def validation_unprocessable?
+      @validation_unprocessable
+    end
+
     # Initialize a new Request wrapper.
     #
     # @param rack_request [Rack::Request] The underlying Rack request object
@@ -24,6 +32,7 @@ module Raxon
       @rack_request = rack_request
       @endpoint = endpoint
       @validation_errors = nil
+      @validation_unprocessable = false
       @validated_params = nil
       @path_params = nil
       @query_params = nil
@@ -76,6 +85,37 @@ module Raxon
     #
     # @return [Hash]
     attr_reader :metadata
+
+    # Handed to the resolver in place of the form and JSON sources when the
+    # request has no body. Frozen and shared: the resolver only reads and merges
+    # its sources, and a fresh empty hash per request is the allocation this
+    # avoids.
+    EMPTY_SOURCE = {}.freeze
+
+    # Whether the request provably carries no body, so the form and JSON sources
+    # are empty without reading anything.
+    #
+    # Reading them is not free: Rack::Request#POST parses the input, and both
+    # sources consult the content type. A GET without a body pays that on every
+    # request that resolves params, to learn that there is nothing there.
+    #
+    # Conservative on every axis, because the cost of being wrong is a silently
+    # ignored body. A declared content type means the request is describing a
+    # body, whatever the framing says, so it is read as before. A
+    # Transfer-Encoding header means the length is framed some other way and is
+    # unknown here. Only a request that declares no content type and either no
+    # length or a length of zero is treated as empty.
+    #
+    # @return [Boolean]
+    #
+    # @private
+    def bodyless?
+      return false if @rack_request.content_type
+      return false if @rack_request.get_header("HTTP_TRANSFER_ENCODING")
+
+      content_length = @rack_request.get_header("CONTENT_LENGTH")
+      content_length.nil? || content_length.empty? || content_length == "0"
+    end
 
     # Get path parameters extracted by the router from dynamic route segments.
     #
@@ -153,6 +193,7 @@ module Raxon
 
       result = resolver.resolve(collect_sources)
       @validation_errors = result.errors
+      @validation_unprocessable = result.unprocessable
       @validated_params = result.params
     end
 
@@ -207,25 +248,35 @@ module Raxon
       )
     end
 
-    # Materialize the six request sources for the resolver.
+    # Materialize the request sources for the resolver.
     #
     # JSON is parsed before form params are read, because reading the form body
     # consumes the Rack stream (the body-stream ordering constraint).
+    #
+    # Headers and cookies are passed as thunks rather than values: they are read
+    # only for parameters declared `in: :header` or `in: :cookie`, which most
+    # endpoints have none of, and #headers allocates a hash of every HTTP_* env
+    # key. The other four feed the lenient merge on every request, so deferring
+    # them would only trade a hash for a Proc.
     #
     # @return [Raxon::ParamResolver::Sources]
     #
     # @private
     def collect_sources
-      json = body_params
-      form = form_params
+      if bodyless?
+        json = EMPTY_SOURCE
+        form = EMPTY_SOURCE
+      else
+        json = body_params
+        form = form_params
+      end
 
       ParamResolver::Sources.new(
         query: query_params,
         form: form,
         json: json,
         path: path_params,
-        headers: headers,
-        cookies: cookies,
+        deferred: self,
         json_parse_error: @json_parse_error
       )
     end
@@ -432,38 +483,35 @@ module Raxon
       @rack_request.ip
     end
 
-    # Get the remote IP address.
+    # Get the client IP address, honoring X-Forwarded-For only for trusted proxies.
     #
-    # SECURITY: X-Forwarded-For and X-Real-IP are set by clients and are trivially
-    # forgeable. They are honored ONLY when +config.trust_proxy_headers+ is enabled,
-    # which you should do only when Raxon runs behind a reverse proxy you control
-    # that *overwrites* these headers. Otherwise (the default) this returns the raw
-    # connection peer (REMOTE_ADDR), which cannot be spoofed by a request header.
+    # SECURITY: X-Forwarded-For is set by clients and is trivially forgeable, so
+    # the leftmost entry must never be trusted blindly — a client can prepend a
+    # fake address, and a proxy that *appends* leaves the forgery in place. This
+    # instead walks the forwarding chain (the X-Forwarded-For entries followed by
+    # the actual connection peer, REMOTE_ADDR) from right to left, discarding
+    # every hop that is one of +config.trusted_proxies+, and returns the first
+    # address that is not. With no trusted proxies configured (the default), it
+    # returns REMOTE_ADDR, which cannot be spoofed by a request header.
+    #
     # Note that Rack's own #ip also parses X-Forwarded-For, so it is NOT a safe
     # substitute here.
     #
-    # When proxy headers are trusted, the order is:
-    # 1. X-Forwarded-For (takes the first/leftmost IP if multiple)
-    # 2. X-Real-IP
-    # 3. Falls back to the standard IP from Rack
+    # @return [String] The client IP address
     #
-    # @return [String] The remote IP address
+    # @example
+    #   Raxon.configure { |c| c.trusted_proxies = ["10.0.0.0/8"] }
+    #   request.remote_ip # => the first non-10.x address from the right of XFF
     def remote_ip
-      return @rack_request.get_header("REMOTE_ADDR") || ip unless Raxon.configuration.trust_proxy_headers
+      remote_addr = @rack_request.get_header("REMOTE_ADDR")
+      matchers = trusted_proxy_matchers
+      return remote_addr || ip if matchers.empty?
 
-      # Check X-Forwarded-For header (may contain multiple IPs)
-      forwarded_for = header("HTTP_X_FORWARDED_FOR")
-      if forwarded_for && !forwarded_for.empty?
-        # Take the first IP (leftmost) as it's typically the original client
-        return forwarded_for.split(",").first.strip
-      end
+      forwarded = header("HTTP_X_FORWARDED_FOR").to_s.split(",").map(&:strip).reject(&:empty?)
+      chain = forwarded + [remote_addr].compact
 
-      # Check X-Real-IP header
-      real_ip = header("HTTP_X_REAL_IP")
-      return real_ip.strip if real_ip && !real_ip.empty?
-
-      # Fall back to standard IP
-      ip
+      client = chain.reverse.find { |address| !trusted_proxy?(address, matchers) }
+      client || remote_addr || ip
     end
 
     # Get the user agent.
@@ -546,6 +594,35 @@ module Raxon
     end
 
     private
+
+    # The configured trusted proxies as IPAddr matchers, memoized per request.
+    # Malformed entries are dropped so a bad config value can never widen trust.
+    #
+    # @return [Array<IPAddr>]
+    #
+    # @private
+    def trusted_proxy_matchers
+      @trusted_proxy_matchers ||= Array(Raxon.configuration.trusted_proxies).filter_map do |proxy|
+        proxy.is_a?(IPAddr) ? proxy : IPAddr.new(proxy.to_s)
+      rescue IPAddr::Error
+        nil
+      end
+    end
+
+    # Whether +address+ parses as an IP that falls within any trusted proxy
+    # range. An unparseable address is not trusted, so the chain walk stops at it.
+    #
+    # @param address [String]
+    # @param matchers [Array<IPAddr>]
+    # @return [Boolean]
+    #
+    # @private
+    def trusted_proxy?(address, matchers)
+      ip = IPAddr.new(address)
+      matchers.any? { |matcher| matcher.include?(ip) }
+    rescue IPAddr::Error
+      false
+    end
 
     # Determine whether the request content type is a form submission.
     #

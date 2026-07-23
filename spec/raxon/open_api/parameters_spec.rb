@@ -22,6 +22,13 @@ RSpec.describe Raxon::OpenApi::Parameters do
       expect(parameter.required).to be true
     end
 
+    # Options default to {} so a bare `define :page` reports the real problem —
+    # a parameter needs a type — instead of an arity error about the DSL itself.
+    it "reports the missing type, not an arity error, when called with no options" do
+      expect { parameters.define(:page) }
+        .to raise_error(KeyError, /option 'type' is required/)
+    end
+
     it "defaults query parameters to optional" do
       parameters.define(:page, in: :query, type: :integer)
       parameter = parameters.parameters.first

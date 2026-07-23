@@ -53,10 +53,6 @@ module Raxon
         file_upload_fields?(request_body) ? FileUploadValidator.new(schema, request_body) : schema
       end
 
-      def map_type_to_dry(openapi_type)
-        @property_schema_builder.map_type_to_dry(openapi_type)
-      end
-
       private
 
       def file_upload_fields?(field)

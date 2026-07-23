@@ -5,8 +5,32 @@ module Raxon
     VALID_HTTP_METHODS = %w[all get post put patch delete head options].freeze
     ACTUAL_HTTP_METHODS = %w[get post put patch delete head options].freeze
 
+    # Thread-local holding the in-progress registry during {load!}. Only the
+    # loading thread sees it; every other thread keeps reading the published
+    # registry until the load finishes. See {load!}.
+    STAGING_KEY = :raxon_route_staging
+
     class << self
-      attr_accessor :catchall, :registered_files, :routes
+      attr_accessor :catchall
+      attr_writer :registered_files, :routes
+
+      # The live route registry.
+      #
+      # While this thread is inside {load!} it returns the registry being built,
+      # so route files register into the staging copy. Every other thread — an
+      # in-flight request, say — keeps seeing the previously published registry
+      # until the load completes and swaps it in.
+      #
+      # @return [Routes]
+      def routes
+        Thread.current[STAGING_KEY]&.fetch(:routes) || @routes
+      end
+
+      # @return [Set<String>] absolute paths of route files already registered
+      # @see routes
+      def registered_files
+        Thread.current[STAGING_KEY]&.fetch(:registered_files) || @registered_files
+      end
 
       # Load all routes from the configured routes directory.
       #
@@ -24,12 +48,62 @@ module Raxon
       # methods defined with `def` are scoped to that file and don't pollute the
       # global namespace.
       #
+      # Files already registered are skipped, so calling this repeatedly is
+      # additive rather than a rebuild. Use {reload!} to rebuild from disk.
+      #
       # @return [Routes] The collection of registered routes
       # @example
       #   routes = Raxon::RouteLoader.load!
       #   routes.find(:GET, "/api/v1/users")
       def load!
+        load_route_files
+        routes
+      end
+
+      # Rebuild the registry from disk, publishing the result atomically.
+      #
+      # Hot reloading runs while requests are in flight, so the previous
+      # approach — clear the live registry, then repopulate it in place — left
+      # every route unroutable for the duration of the load. That window is not
+      # an instant: it is a glob plus a read and eval of every route file, and a
+      # request landing inside it 404s (or falls through to the catchall) for
+      # routes that plainly exist.
+      #
+      # Route files here register into a staging registry that only the loading
+      # thread can see; other threads keep reading the published one until a
+      # single assignment swaps it in. A reader therefore observes either the
+      # complete old registry or the complete new one, never a partial build.
+      #
+      # If a route file raises, nothing is published and the previous registry
+      # keeps serving — the failure surfaces on the request that triggered the
+      # reload, and fixing the file recovers, exactly as before.
+      #
+      # @return [Routes] The newly published collection of registered routes
+      def reload!
+        staged = {routes: Routes.new, registered_files: Set.new}
+
+        Thread.current[STAGING_KEY] = staged
+        begin
+          load_route_files
+        ensure
+          Thread.current[STAGING_KEY] = nil
+        end
+
+        @routes = staged[:routes]
+        @registered_files = staged[:registered_files]
+        routes
+      end
+
+      # Discover and evaluate every route file, in the order the DSL requires,
+      # registering into whichever registry is currently in scope (the live one,
+      # or a staging copy when called from {reload!}).
+      #
+      # @return [void]
+      #
+      # @private
+      def load_route_files
         directories = expanded_routes_directories
+        roots = PathContainment.resolve_roots(directories)
         route_files = directories.flat_map do |directory|
           Dir.glob(File.join(directory, "**", "*.rb"), File::FNM_DOTMATCH)
         end
@@ -43,10 +117,25 @@ module Raxon
         end
 
         sorted_files.each do |file|
+          guard_contained!(file, roots)
           load_route_in_isolation(file)
         end
+      end
 
-        routes
+      # Refuse to load a route file whose real path escapes the configured
+      # routes tree via a symlink. See {Raxon::PathContainment}.
+      #
+      # @param file [String] the globbed route file path
+      # @param roots [Array<String>] real paths of the configured routes dirs
+      # @raise [Raxon::Error] when the file resolves outside every root
+      # @return [void]
+      #
+      # @private
+      def guard_contained!(file, roots)
+        return if PathContainment.contained?(file, roots)
+
+        raise Raxon::Error, "Refusing to load route file outside routes_directory: #{file} " \
+                            "(it resolves outside the configured routes tree — check for a symlink)."
       end
 
       # Load a route file in an isolated context.
@@ -55,6 +144,11 @@ module Raxon
       # content within that class. This ensures that any methods defined with
       # `def` become instance methods of the anonymous class rather than polluting
       # the global namespace (main).
+      #
+      # This is namespace isolation, not a security sandbox: the file is executed
+      # with `class_eval` and has full process privileges (constants, Kernel,
+      # filesystem, network). Route directories must be trusted — see
+      # {Raxon::PathContainment} and docs/security.md.
       #
       # The anonymous class includes HandlerHelpers, so shared helpers are available
       # alongside file-specific methods.
@@ -126,7 +220,7 @@ module Raxon
         route_context = Thread.current[:raxon_route_context]
 
         OpenApi::DSL.endpoint do |endpoint|
-          configure_endpoint(endpoint, file_path, path, method)
+          configure_endpoint(endpoint, file_path, path, method, param_names)
 
           # Pre-compile ERB template if it exists
           compile_erb_template(endpoint, file_path)
@@ -226,11 +320,12 @@ module Raxon
       # @return [void]
       #
       # @private
-      def configure_endpoint(endpoint, file_path, path, method)
+      def configure_endpoint(endpoint, file_path, path, method, param_names = [])
         endpoint.path(path)
         endpoint.method = method
         endpoint.operation((method == "all") ? ACTUAL_HTTP_METHODS.map(&:to_sym) : method.to_sym)
         endpoint.route_file_path = file_path
+        endpoint.infer_path_parameters(param_names)
       end
 
       # Extract routing information from a file path.

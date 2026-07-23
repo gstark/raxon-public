@@ -33,17 +33,48 @@ module Raxon
     #
     # query/form/json/path carry symbol keys; headers carry the raw HTTP_* env
     # keys (as Request#headers returns); cookies carry string keys.
-    Sources = Struct.new(
-      :query, :form, :json, :path, :headers, :cookies, :json_parse_error,
-      keyword_init: true
-    )
+    #
+    # Headers and cookies are read only for parameters declaring `in: :header`
+    # or `in: :cookie`, which most endpoints have none of, and Request#headers
+    # allocates a hash of every HTTP_* env key. Rather than materialize them,
+    # Request passes itself as +deferred+ and they are fetched on first read.
+    # Passing them directly still works and wins — that is what tests and
+    # programmatic callers do — and the other four sources stay eager because
+    # they feed the lenient merge on every request anyway.
+    class Sources
+      # @param deferred [#headers, #cookies, nil] Consulted for headers and
+      #   cookies when they are not passed directly
+      def initialize(query: {}, form: {}, json: {}, path: {}, headers: nil, cookies: nil,
+        json_parse_error: false, deferred: nil)
+        @query = query
+        @form = form
+        @json = json
+        @path = path
+        @headers = headers
+        @cookies = cookies
+        @json_parse_error = json_parse_error
+        @deferred = deferred
+      end
+
+      def headers
+        @headers ||= @deferred ? @deferred.headers : {}
+      end
+
+      def cookies
+        @cookies ||= @deferred ? @deferred.cookies : {}
+      end
+
+      attr_reader :query, :form, :json, :path, :json_parse_error
+    end
 
     # The immutable outcome of resolution.
     #
     # @!attribute params [Hash] The final, handler-ready parameters
     # @!attribute errors [Hash, nil] Validation errors, or nil on success
     # @!attribute parse_error [Boolean] Whether the JSON body failed to parse
-    Result = Struct.new(:params, :errors, :parse_error, keyword_init: true)
+    # @!attribute unprocessable [Boolean] Whether the failure was a content
+    #   rejection (422) rather than a malformed request (400)
+    Result = Struct.new(:params, :errors, :parse_error, :unprocessable, keyword_init: true)
 
     # @param parameters [Array<Raxon::OpenApi::Parameter>] Declared parameters
     #   (their `in:` locations drive source isolation). Defaults to empty.
@@ -77,11 +108,30 @@ module Raxon
     # overrides query/form and path overrides all client-supplied values.
     #
     # @return [Hash]
+    # Merging an empty source allocates a hash to copy nothing into, and most
+    # requests carry only one or two sources: a GET with a query string has no
+    # form or JSON, and a bodyless request has neither. Skipping the empty ones
+    # takes the common case from three intermediate hashes to one.
+    #
+    # The result is always a fresh hash, never one of the sources. Callers own
+    # what they get back — on a validation failure it becomes the handler's
+    # params — and handing them #query_params itself would let a handler mutate
+    # the request's own source hash.
     def assemble_raw
-      @sources.query
-        .merge(@sources.form)
-        .merge(@sources.json)
-        .merge(@sources.path)
+      raw = merge_source(nil, @sources.query)
+      raw = merge_source(raw, @sources.form)
+      raw = merge_source(raw, @sources.json)
+      raw = merge_source(raw, @sources.path)
+      raw || {}
+    end
+
+    # @param raw [Hash, nil] The accumulator, nil until the first non-empty source
+    # @param source [Hash]
+    # @return [Hash, nil]
+    def merge_source(raw, source)
+      return raw if source.empty?
+
+      raw.nil? ? source.dup : raw.merge!(source)
     end
 
     # Build the source-specific hash used for validation. Any parameter with a
@@ -153,20 +203,30 @@ module Raxon
     # @param raw [Hash]
     # @return [Result]
     def finalize(validation_params, raw)
-      params, errors = validate(validation_params, raw)
+      params, errors, unprocessable = validate(validation_params, raw)
       params = Raxon::OpenApi::RequestBodyCoercer.new(@request_body).call(params) if @request_body
-      Result.new(params: params, errors: errors, parse_error: false)
+      Result.new(params: params, errors: errors, parse_error: false, unprocessable: unprocessable)
     end
 
-    # @return [Array(Hash, Hash | nil)] [params, errors]
+    # @return [Array(Hash, Hash | nil, Boolean)] [params, errors, unprocessable]
     def validate(validation_params, raw)
-      return [raw, nil] unless @schema
+      return [raw, nil, false] unless @schema
 
       result = @schema.call(validation_params)
       if result.success?
-        [result.to_h, nil]
+        # Dry::Schema returns declared fields only. Route parameters validate
+        # their own sources, but Raxon has historically kept undeclared query
+        # and body values available to handlers; retain that behavior while
+        # letting declared values replace their raw counterparts with coerced
+        # values.
+        declared = @parameters.map { |parameter| parameter.name.to_sym }
+        declared.concat(@request_body.properties.keys.map(&:to_sym)) if @request_body&.properties
+        [raw.reject { |key, _| declared.include?(key.to_sym) }.merge(result.to_h), nil, false]
       else
-        [raw, result.errors.to_h]
+        # Only the upload validator classifies a failure as a content rejection;
+        # a plain Dry::Schema result has no opinion, so those stay 400.
+        unprocessable = result.respond_to?(:unprocessable?) && result.unprocessable?
+        [raw, result.errors.to_h, unprocessable]
       end
     end
   end

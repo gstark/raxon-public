@@ -31,8 +31,10 @@ module Raxon
       include StrictOptions
 
       # @!attribute [r] type
-      #   @return [String] The response type (:object, :array, etc.), automatically processed
-      option :type, proc { |value| OpenApi::DSL.process_type(value) }
+      #   @return [String, nil] The response type (:object, :array, etc.),
+      #     automatically processed. Optional: a response with no type declares
+      #     no body (e.g. a 204) and is emitted without a content object.
+      option :type, proc { |value| OpenApi::TypeSystem.process_type_option(value) }, optional: true
 
       # @!attribute [r] as
       #   @return [Symbol, String, nil] Reference to a component schema
@@ -62,7 +64,7 @@ module Raxon
       #   @return [String] The response media type, used as the +content+ key in
       #     the generated OpenAPI response object (default: "application/json").
       #     Set this for non-JSON responses such as +"text/csv"+.
-      option :content_type, default: proc { "application/json" }
+      option :content_type, proc { |value| OpenApi::TypeSystem.process_content_type(value) }, default: proc { "application/json" }
 
       # @!attribute [r] nullable
       #   @return [Boolean] Whether the response can be null (default: false)
@@ -71,13 +73,11 @@ module Raxon
       # @!attribute [r] extensions
       #   @return [Hash] OpenAPI specification extensions merged into the emitted
       #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".
-      option :extensions, proc { |value| OpenApi::DSL.process_extensions(value) }, default: proc { {} }
+      option :extensions, proc { |value| OpenApi::TypeSystem.process_extensions(value) }, default: proc { {} }
 
       # @!attribute [r] properties
       #   @return [Hash] Hash of property definitions
       option :properties, default: proc { {} }
-
-      attr_reader :options
 
       # Construct a response, rejecting any unknown option (see {StrictOptions}).
       #
@@ -85,7 +85,6 @@ module Raxon
       # @raise [ArgumentError] when an unsupported option is supplied
       def initialize(**options)
         reject_unknown_options!(options)
-        @options = options
         super
       end
 

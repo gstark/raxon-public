@@ -1,7 +1,12 @@
 module Raxon
   # Configuration for Raxon applications
   class Configuration
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trust_proxy_headers, :max_request_body_size, :logger, :schema_adapter
+    # Default cap on request body size (10 MB). Large enough for typical JSON
+    # payloads and modest file uploads while bounding how much a single request
+    # can read into memory. Applications that accept larger uploads should raise
+    # max_request_body_size; set it to nil to disable the check entirely.
+    DEFAULT_MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trusted_proxies, :max_request_body_size, :logger, :schema_adapter, :regexp_timeout, :wrap_error_handler, :path_parameter_defaults, :validation_error_profiles
     alias_method :routes_directories, :routes_directory
     alias_method :routes_directories=, :routes_directory=
 
@@ -27,20 +32,61 @@ module Raxon
       @helpers_path = nil
       @root = nil
       @rails_compatible_instrumentation = false
-      @response_validation = production_environment? ? :log : :error_response
+      # Response validation runs the endpoint's response schema over every
+      # response body it emits. It is opt-in, and off in every environment by
+      # default, because it is the most expensive thing Raxon can do per request
+      # — roughly 60% of the cost of a small JSON response — and because a
+      # response schema is primarily a documentation artifact: an endpoint whose
+      # body drifts from its declared schema still answers correctly.
+      #
+      # Turn it on where the cost buys something. Globally, in the environments
+      # where a mismatch is actionable:
+      #
+      #   Raxon.configure do |config|
+      #     config.response_validation = :error_response unless production?
+      #   end
+      #
+      # Or per endpoint, which works regardless of the global setting:
+      #
+      #   endpoint.validate_response true
+      #
+      # Modes: :error_response (500 with the errors), :raise
+      # (Raxon::ResponseValidationError), :log (warn and answer normally), or
+      # false (skip).
+      @response_validation = false
       @expose_validation_details = !production_environment?
       # Substrings (case-insensitive) of parameter/header names whose values are
       # redacted before being handed to instrumentation/APM payloads. Matches the
       # spirit of Rails' config.filter_parameters.
       @filter_parameters = %i[password passwd secret token api_key apikey authorization cookie access_token refresh_token private_key credit_card card_number cvv ssn]
-      # When false (default), X-Forwarded-For / X-Real-IP are NOT trusted, because
-      # any client can forge them. Set true only when Raxon runs behind a proxy
-      # you control that overwrites these headers. See Request#remote_ip.
-      @trust_proxy_headers = false
-      # Maximum request body size in bytes. nil disables the check. When set,
-      # requests whose Content-Length exceeds it are rejected before the body is
-      # read into memory.
-      @max_request_body_size = nil
+      # Per-match timeout (seconds) applied to the regexps Raxon compiles from
+      # developer-declared schema patterns and filter_parameters, so a
+      # catastrophically-backtracking pattern raises Regexp::TimeoutError instead
+      # of pinning a CPU on attacker-controlled input (ReDoS). Scoped to Raxon's
+      # own regexps — it does not touch the host app's global Regexp.timeout. Set
+      # nil to disable. See docs/security.md.
+      @regexp_timeout = 1.0
+      # When true (default), Raxon::Server wraps the router in
+      # Raxon::ErrorHandler automatically unless one was already added with
+      # `use`, so an unhandled exception returns a clean JSON 500 instead of
+      # leaking to the app server's default error page. Set false to opt out
+      # (e.g. when a host framework or your own middleware handles errors).
+      @wrap_error_handler = true
+      # Reverse proxies whose X-Forwarded-For entries may be trusted, as an array
+      # of IP or CIDR strings (or IPAddr objects), e.g. ["10.0.0.0/8",
+      # "127.0.0.1"]. Empty (default) means trust nothing: Request#remote_ip
+      # returns the raw connection peer, which a client cannot spoof. When set,
+      # remote_ip walks X-Forwarded-For from the right, discarding these trusted
+      # hops, and returns the first address that is not one of them.
+      @trusted_proxies = []
+      # Maximum request body size in bytes (default 10 MB; nil disables the
+      # check). A request whose Content-Length exceeds it is rejected before the
+      # body is read; a request that lies about or omits Content-Length (e.g. a
+      # chunked body) is rejected mid-read once it exceeds the limit. See
+      # Raxon::LimitedInput.
+      @max_request_body_size = DEFAULT_MAX_REQUEST_BODY_SIZE
+      @path_parameter_defaults = nil
+      @validation_error_profiles = {}
       @before_blocks = []
       @after_blocks = []
       @around_blocks = []
@@ -60,17 +106,30 @@ module Raxon
       @schema_adapter = nil
     end
 
+    # Register a named request-validation HTTP contract. Route ancestors opt
+    # into it with +validation_profile+; the body mapper receives the error
+    # message and details and must return a JSON-compatible value.
+    def validation_error_profile(name, status:, &body)
+      @validation_error_profiles[name.to_sym] = {status: status, body: body}.freeze
+    end
+
     # Route hot reloading setting; nil means "development only".
     attr_accessor :reload_routes
 
-    # Whether route hot reloading is active, resolving the nil default to
-    # "on in development, off elsewhere".
+    # Whether route hot reloading is active.
+    #
+    # Hot reloading re-executes route files on change, which is a code-execution
+    # surface if the routes directory is ever writable by an untrusted party.
+    # It is therefore confined to development: outside development it is always
+    # off, even if +reload_routes+ was explicitly set true. Within development
+    # the nil default resolves to on, and an explicit true/false is honored.
     #
     # @return [Boolean]
     def reload_routes?
+      return false unless Raxon.development?
       return @reload_routes unless @reload_routes.nil?
 
-      Raxon.development?
+      true
     end
 
     def production_environment?

@@ -33,7 +33,7 @@ RSpec.configure do |config|
 
   # Reset routes and configuration before each test
   config.before(:each) do
-    Raxon.instance_variable_set(:@configuration, Raxon::Configuration.new)
+    Raxon.reset!
     Raxon.configure do |config|
       config.routes_directory = "routes"
       # The suite runs in the development environment, where hot reloading
@@ -41,12 +41,6 @@ RSpec.configure do |config|
       # Reloader specs enable it explicitly.
       config.reload_routes = false
     end
-    Raxon::RouteLoader.reset!
-    Raxon::OpenApi::DSL.reset!
-    # Helpers load once per process; without this reset, a test that loads
-    # helpers leaves the flag set and a later test's Router.new silently skips
-    # loading its own helpers_path (order-dependent flake).
-    Raxon.instance_variable_set(:@helpers_loaded, false)
   end
 
   # Load fixture routes when load_routes: true is set on a spec
