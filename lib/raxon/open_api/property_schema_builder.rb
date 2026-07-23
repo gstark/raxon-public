@@ -9,6 +9,20 @@ module Raxon
     # two subtly-divergent copies of required/optional, scalar, array, object,
     # nullable, and file handling.
     class PropertySchemaBuilder
+      # A `datetime`/`date` field is a string on the wire, and a request can only
+      # ever carry it as one. A *response* is different: a handler that returns
+      # domain objects hands back a Time, Date, or DateTime, and JSON.generate
+      # turns it into exactly the string the schema describes. Validating those
+      # as strings rejects bodies that are correct once serialized, so accept
+      # either form. ActiveSupport::TimeWithZone answers is_a?(Time), so it is
+      # covered by the Time branch.
+      TEMPORAL = (
+        Dry::Types["strict.string"] |
+        Dry::Types["strict.time"] |
+        Dry::Types["strict.date"] |
+        Dry::Types["strict.date_time"]
+      ).freeze
+
       def add_parameter_to_schema(schema_context, param)
         add_field_to_schema(schema_context, param.name.to_sym, param)
       end
@@ -42,7 +56,9 @@ module Raxon
           # An untyped property means "any type" in the emitted document (no
           # `type` key), so it must not be validated as a string at runtime.
           :any
-        when "string", "datetime", "date_time", "date", "Dayjs", "uuid", "email"
+        when "datetime", "date_time", "date", "Dayjs"
+          :temporal
+        when "string", "uuid", "email"
           :string
         when "number"
           :float
@@ -155,6 +171,8 @@ module Raxon
 
         return add_untyped_field(key, field, constraints) if type == :any
 
+        type = TEMPORAL if type == :temporal
+
         if field.nullable
           key.maybe(type, **constraints)
         else
@@ -198,6 +216,7 @@ module Raxon
 
         type = dry_schema_type(field.of.to_s)
         return nil if type == :hash
+        return TEMPORAL if type == :temporal
 
         type
       end

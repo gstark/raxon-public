@@ -26,10 +26,10 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder do
   describe "#dry_schema_type" do
     {
       "string" => :string,
-      "datetime" => :string,
-      "date_time" => :string,
-      "date" => :string,
-      "Dayjs" => :string,
+      "datetime" => :temporal,
+      "date_time" => :temporal,
+      "date" => :temporal,
+      "Dayjs" => :temporal,
       "uuid" => :string,
       "email" => :string,
       "number" => :float,
@@ -43,6 +43,42 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder do
       it "maps #{input.inspect} to #{expected.inspect}" do
         expect(builder.dry_schema_type(input)).to eq(expected)
       end
+    end
+  end
+
+  # A datetime is a string on the wire, but a handler returning domain objects
+  # hands back a Time/Date/DateTime that JSON.generate turns into exactly that
+  # string. Validating those as strings rejected bodies that were correct once
+  # serialized — every `created_at` an ORM-backed serializer produced.
+  describe "datetime and date properties" do
+    %w[datetime date_time date Dayjs].each do |declared|
+      it "accepts a string or a temporal object for #{declared}" do
+        schema = schema_for(:at, property(type: declared))
+
+        [Time.now, Date.today, DateTime.now, "2026-07-23T00:00:00Z"].each do |value|
+          expect(schema.call(at: value).success?).to be(true), "rejected #{value.class}"
+        end
+      end
+    end
+
+    it "still rejects a value that is neither" do
+      schema = schema_for(:at, property(type: "datetime"))
+
+      expect(schema.call(at: 42).success?).to be false
+    end
+
+    it "allows nil on a nullable datetime" do
+      schema = schema_for(:at, property(type: "datetime", nullable: true))
+
+      expect(schema.call(at: nil).success?).to be true
+      expect(schema.call(at: Time.now).success?).to be true
+    end
+
+    it "accepts temporal items inside a declared array" do
+      schema = schema_for(:dates, property(type: "array", of: "date"))
+
+      expect(schema.call(dates: [Date.today, "2026-07-23"]).success?).to be true
+      expect(schema.call(dates: [42]).success?).to be false
     end
   end
 
