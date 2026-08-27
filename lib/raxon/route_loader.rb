@@ -57,6 +57,7 @@ module Raxon
       #   routes.find(:GET, "/api/v1/users")
       def load!
         load_route_files
+        routes.prepare!
         routes
       end
 

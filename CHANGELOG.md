@@ -29,6 +29,19 @@ release.
 
 ### Changed
 
+- Registering a route no longer rebuilds the prepared-route table for every
+  path already registered. That was quadratic: each of an application's N
+  registrations re-prepared all N entries. One application registering 675
+  routes made 173,165 `prepare_entry_routes` calls and built 404,329
+  `EffectiveEndpoint` objects — 599 per route — which was 72% of its route
+  loading, plus 16% of boot spent in GC collecting them.
+
+  Registration now marks the table dirty and `RouteLoader.load!` builds it once
+  via the new `Routes#prepare!`. Readers (`find`, `all`, `allowed_methods`)
+  build it on demand too, so a caller that skips `prepare!` pays latency on one
+  request rather than getting a wrong answer. In that same application route
+  loading went from 5.56s to 0.91s and `EffectiveEndpoint` allocations from
+  404,329 to 1,062.
 - Response body validation is now opt-in, off by default in every environment
   (was `:error_response` outside production and `:log` in production)
   - Running the response schema over every body was the single most expensive

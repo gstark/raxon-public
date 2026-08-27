@@ -35,6 +35,20 @@ module Raxon
       @dynamic_entries = []
       @dynamic_root = new_index_node
       @unindexable_entries = []
+      @prepared_dirty = false
+      @prepared_mutex = Mutex.new
+    end
+
+    # Build the prepared-route table now, if registrations have invalidated it.
+    #
+    # Callers that finish a batch of registrations (RouteLoader.load!) call this
+    # so boot pays exactly one rebuild and no request pays any of it. Readers
+    # call it too, so forgetting it costs latency on one request, not
+    # correctness.
+    #
+    # @return [void]
+    def prepare!
+      ensure_prepared_routes
     end
 
     def each(&block)
@@ -82,6 +96,7 @@ module Raxon
     # @param path [String] Request path
     # @return [Hash, nil] Route data with endpoints array and params, or nil if not found
     def find(method, path)
+      ensure_prepared_routes
       method = UPCASED_METHODS[method] || method.upcase
 
       if (entry = @entries_by_path[path]) && (prepared = entry[:prepared][method])
@@ -101,6 +116,7 @@ module Raxon
     # @param path [String] Request path
     # @return [Array<String>] Uppercase method names, empty if the path matches no route
     def allowed_methods(path)
+      ensure_prepared_routes
       methods = matching_entries(path).flat_map { |entry| entry_methods(entry) }
       return [] if methods.empty?
 
@@ -112,6 +128,7 @@ module Raxon
     #
     # @return [Hash] Routes keyed by method/path
     def all
+      ensure_prepared_routes
       @entries_by_path.each_with_object({}) do |(path, entry), routes|
         routes[route_key("ALL", path)] = route_data(entry, entry[:all]) if entry[:all]
         entry[:methods].each do |method, endpoint|
@@ -166,20 +183,36 @@ module Raxon
       raise_collision("ALL", path, endpoint, entry[:all]) if entry[:all]
 
       entry[:all] = endpoint
-      rebuild_prepared_routes
+      @prepared_dirty = true
     end
 
     def register_method_route(method, path, endpoint, entry)
       raise_collision(method, path, endpoint, entry[:methods][method]) if entry[:methods].key?(method)
 
       entry[:methods][method] = endpoint
-      rebuild_prepared_routes
+      @prepared_dirty = true
     end
 
     def raise_collision(method, path, endpoint, existing_endpoint)
       raise Raxon::Error, "Route collision for #{method.upcase} #{path}: " \
                           "#{endpoint.route_file_path || "unknown file"} conflicts with " \
                           "#{existing_endpoint.route_file_path || "unknown file"}"
+    end
+
+    # Registration marks the prepared table dirty instead of rebuilding it.
+    # Rebuilding on every register was quadratic: each of an application's N
+    # registrations re-prepared all N entries. One app registered 675 routes and
+    # built 404,329 EffectiveEndpoint objects, 599 per route, which was 72% of
+    # its route loading. Deferring to the first read makes that one rebuild.
+    def ensure_prepared_routes
+      return unless @prepared_dirty
+
+      @prepared_mutex.synchronize do
+        return unless @prepared_dirty
+
+        rebuild_prepared_routes
+        @prepared_dirty = false
+      end
     end
 
     def rebuild_prepared_routes
