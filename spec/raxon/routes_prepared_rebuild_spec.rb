@@ -20,21 +20,19 @@ RSpec.describe Raxon::Routes, "prepared route rebuilds" do
   end
 
   # Counts EffectiveEndpoint constructions for the duration of the block.
+  # Wrapped at .new via rspec-mocks — counting in #initialize meant redefining
+  # it twice per call, which tripped Ruby's method-redefined warning. A repeat
+  # call replaces the previous wrap, so each block gets a fresh count.
   def count_effective_endpoints
     built = 0
-    original = Raxon::EffectiveEndpoint.instance_method(:initialize)
 
-    Raxon::EffectiveEndpoint.class_eval do
-      define_method(:initialize) do |*args, **kwargs|
-        built += 1
-        original.bind_call(self, *args, **kwargs)
-      end
+    allow(Raxon::EffectiveEndpoint).to receive(:new).and_wrap_original do |original, *args, **kwargs|
+      built += 1
+      original.call(*args, **kwargs)
     end
 
     yield
     built
-  ensure
-    Raxon::EffectiveEndpoint.class_eval { define_method(:initialize, original) }
   end
 
   # Hold the rebuild open on its first entry, so a second thread is certain to

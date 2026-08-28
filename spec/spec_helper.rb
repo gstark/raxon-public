@@ -7,6 +7,13 @@ end
 
 require "raxon"
 
+# unicode_utils 1.4.0 (tty-table → strings) has an unused variable in this
+# file, and the gem is unmaintained. `config.warnings = true` below sets
+# $VERBOSE, so loading it mid-suite prints a parse warning we cannot fix.
+# Parsing it here, while $VERBOSE is still off, keeps the run clean without
+# suppressing any warning from this repo's own code.
+require "unicode_utils/each_grapheme"
+
 Dir[File.join(__dir__, "support", "**", "*.rb")].sort.each { |file| require file }
 
 RSpec.configure do |config|

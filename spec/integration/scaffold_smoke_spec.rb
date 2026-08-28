@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+# Loaded explicitly: under `bundle exec` the constant is already there, but a
+# bare `rake` is not, and with_unbundled_env below needs it either way.
+require "bundler"
 require "open3"
 require "shellwords"
 require "tmpdir"

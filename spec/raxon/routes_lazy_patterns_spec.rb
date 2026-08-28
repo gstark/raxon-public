@@ -21,19 +21,19 @@ RSpec.describe "lazy route pattern compilation" do
   end
 
   # Counts Mustermann pattern constructions for the duration of the block.
+  # Wrapped via rspec-mocks rather than define_singleton_method so the
+  # redefinition does not trip Ruby's method-redefined warning; the stub lives
+  # until the example ends, so the returned snapshot is taken at block exit.
   def count_patterns
     built = []
-    original = Mustermann.method(:new)
 
-    Mustermann.define_singleton_method(:new) do |path, *args, **kwargs|
+    allow(Mustermann).to receive(:new).and_wrap_original do |original, path, *args, **kwargs|
       built << path
       original.call(path, *args, **kwargs)
     end
 
     yield
-    built
-  ensure
-    Mustermann.define_singleton_method(:new, original)
+    built.dup
   end
 
   describe "registration" do
@@ -143,20 +143,19 @@ RSpec.describe Raxon::RouteLoader, "repeated load!" do
   after { FileUtils.remove_entry(@dir) if @dir }
 
   # File.read is the observable half of "did we evaluate this file again"; the
-  # class_eval that follows is what actually cost the time.
+  # class_eval that follows is what actually cost the time. Wrapped via
+  # rspec-mocks so the redefinition does not trip Ruby's method-redefined
+  # warning.
   def count_route_file_reads
     reads = 0
-    original = Raxon::RouteLoader.method(:load_route_in_isolation)
 
-    Raxon::RouteLoader.define_singleton_method(:load_route_in_isolation) do |file|
+    allow(Raxon::RouteLoader).to receive(:load_route_in_isolation).and_wrap_original do |original, file|
       reads += 1
       original.call(file)
     end
 
     yield
     reads
-  ensure
-    Raxon::RouteLoader.define_singleton_method(:load_route_in_isolation, original)
   end
 
   it "does not re-evaluate a file it has already registered" do
