@@ -29,6 +29,29 @@ release.
 
 ### Changed
 
+- Route patterns are compiled on first use rather than at registration. A static
+  path is answered by an exact lookup and never consults its pattern, and a
+  dynamic one is not asked until a request reaches the candidate scan, so an
+  application paid at boot for patterns most of which nothing ever read. One
+  application built 520 patterns that way — 252 of them for static paths —
+  costing 0.45s of boot, and removing them took 0.75s off it: the extra 0.30s
+  was GC collecting the syntax trees and regexps.
+
+  `Routes#route_entry` now leaves the pattern nil and the private
+  `#pattern_for(entry)` memoizes it on first use. A route's path parameter names
+  come from scanning the path with `PARAM_SEGMENT_NAME` instead of asking
+  `Mustermann#names`, which returns the same list, so recording parameters no
+  longer drags the pattern back into registration. `Routes#all` still carries a
+  compiled pattern under `:mustermann`, built on demand.
+- `RouteLoader.load!` no longer re-reads and re-evaluates route files it has
+  already registered. `#define` did refuse the duplicate registration, but only
+  after `#load_route_in_isolation` had read the file and `class_eval`ed it, so a
+  second `load!` still paid for every file. An application that loads routes at
+  boot and then builds a `Router` — which loads them again so `run
+  Raxon::Server.new` works on its own — did exactly that: 676 files evaluated
+  twice, 0.23s of one application's boot. `#load_route_files` now skips a file
+  already in `registered_files`. `reload!` stages an empty registry, so a
+  rebuild from disk still loads everything.
 - Registering a route no longer rebuilds the prepared-route table for every
   path already registered. That was quadratic: each of an application's N
   registrations re-prepared all N entries. One application registering 675

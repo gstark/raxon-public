@@ -117,7 +117,20 @@ module Raxon
           [is_all ? 0 : 1, depth, file]
         end
 
+        already_loaded = registered_files
+
         sorted_files.each do |file|
+          # {define} already refuses to register a file twice, but it does so
+          # after the file has been read and evaluated, so a second load! still
+          # paid for every file. An app that loads routes at boot and then builds
+          # a Router does exactly that: the mount re-read and re-evaluated all of
+          # them for nothing. Skipping here is the same decision, made before the
+          # work rather than after.
+          #
+          # {reload!} stages an empty set, so a rebuild from disk still loads
+          # everything.
+          next if already_loaded.include?(File.expand_path(file))
+
           guard_contained!(file, roots)
           load_route_in_isolation(file)
         end

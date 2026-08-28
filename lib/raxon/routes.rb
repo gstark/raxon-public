@@ -22,6 +22,12 @@ module Raxon
     # `{name}.json` — cannot be indexed by equality and is handled separately.
     PURE_PARAM_SEGMENT = /\A\{[^{}\/]+\}\z/
 
+    # Path parameter names, in order, straight from the template string. Scanning
+    # a path with this produces the same list as Mustermann#names, which is what
+    # lets an entry record its parameters without compiling its pattern. See
+    # {#pattern_for}.
+    PARAM_SEGMENT_NAME = /\{([^{}\/]+)\}/
+
     # Dynamic-route count below which the index is not worth consulting. Around
     # this many patterns, asking Mustermann each in turn costs about what
     # splitting the path and collecting candidates costs; measured at 8 routes,
@@ -151,11 +157,10 @@ module Raxon
 
     def route_entry(path)
       @entries_by_path[path] ||= begin
-        mustermann = Mustermann.new(path)
         entry = {
           path: path,
-          mustermann: mustermann,
-          param_symbols: mustermann.names.map(&:to_sym).freeze,
+          mustermann: nil,
+          param_symbols: path.scan(PARAM_SEGMENT_NAME).map { |(name)| name.to_sym }.freeze,
           dynamic: path.include?("{"),
           all: nil,
           methods: {},
@@ -170,10 +175,25 @@ module Raxon
       end
     end
 
+    # The compiled pattern for an entry, built on first use.
+    #
+    # A static path is answered by an exact lookup in @entries_by_path and never
+    # consults its pattern, and a dynamic one is only asked once a request
+    # actually reaches the candidate scan. Building all of them at registration
+    # therefore front-loads work most of which is never needed: on an app with
+    # ~675 routes it cost 0.45s of boot, over half of it on static paths.
+    #
+    # Path parameter names come from the path string instead (PARAM_SEGMENT_NAME
+    # produces the same list as Mustermann#names), so param extraction does not
+    # drag the pattern back into registration.
+    def pattern_for(entry)
+      entry[:mustermann] ||= Mustermann.new(entry[:path])
+    end
+
     def route_data(entry, endpoint)
       {
         endpoint: endpoint,
-        mustermann: entry[:mustermann],
+        mustermann: pattern_for(entry),
         entry: entry,
         path: entry[:path]
       }
@@ -345,7 +365,7 @@ module Raxon
       entries << exact if exact
 
       dynamic_candidates(path).each do |entry|
-        entries << entry if !entry.equal?(exact) && entry[:mustermann].match(path)
+        entries << entry if !entry.equal?(exact) && pattern_for(entry).match(path)
       end
 
       entries
@@ -408,7 +428,7 @@ module Raxon
         endpoint = entry[:methods][method]
         next unless endpoint
 
-        match = entry[:mustermann].match(path)
+        match = pattern_for(entry).match(path)
         return dynamic_route_data(entry, method, match) if match
       end
 
@@ -420,7 +440,7 @@ module Raxon
         endpoint = entry[:all]
         next unless endpoint
 
-        match = entry[:mustermann].match(path)
+        match = pattern_for(entry).match(path)
         return dynamic_route_data(entry, method, match) if match
       end
 
@@ -435,7 +455,7 @@ module Raxon
       dynamic_candidates(path).each do |entry|
         next unless entry[:methods]["GET"]
 
-        match = entry[:mustermann].match(path)
+        match = pattern_for(entry).match(path)
         return dynamic_route_data(entry, method, match) if match
       end
 
