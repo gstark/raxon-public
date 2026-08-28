@@ -246,7 +246,7 @@ module Raxon
       @resolver ||= ParamResolver.new(
         parameters: @endpoint ? @endpoint.parameters.parameters : [],
         schema: @endpoint&.request_schema,
-        request_body: @endpoint&.request_body
+        request_body: @endpoint&.resolved_request_body
       )
     end
 

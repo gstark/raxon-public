@@ -18,8 +18,12 @@ into one map under a fixed precedence (`query < form < json < path`), then
 re-reads any parameter with a declared `in:` location from *its* source so a body
 value can't satisfy a required header, cookie, or path parameter. The merged set
 is validated against the endpoint's request schema; on failure the lenient,
-unvalidated merge is returned and the errors are recorded. Finally, request-body
-properties are coerced (file uploads wrapped) into their final shape.
+unvalidated merge is returned and the errors are recorded. Values for the
+body's `read_only` properties are then deleted, and request-body properties are
+coerced (file uploads wrapped) into their final shape. The request body the
+resolver consumes is the *resolved* one — `OpenApi::RequestBodyResolver` has
+already inlined component references and removed `read_only` properties — so an
+`as:` body behaves exactly like inline declarations.
 
 This is a **deep seam**: its interface is one verb over plain inputs —
 `resolve(sources) -> Result(params, errors, parse_error)` — but it hides

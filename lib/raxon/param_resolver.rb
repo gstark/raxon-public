@@ -204,8 +204,25 @@ module Raxon
     # @return [Result]
     def finalize(validation_params, raw)
       params, errors, unprocessable = validate(validation_params, raw)
+      strip_read_only(params)
       params = Raxon::OpenApi::RequestBodyCoercer.new(@request_body).call(params) if @request_body
       Result.new(params: params, errors: errors, parse_error: false, unprocessable: unprocessable)
+    end
+
+    # Delete top-level values for the body's read-only properties. Those
+    # properties are absent from the resolved schema, and the lenient merge
+    # keeps undeclared keys, so without this a client-supplied value for a
+    # server-managed field (deleted_at, say) would flow through to the handler.
+    # Runs on the fallback path too — belt and suspenders, since a failed
+    # validation already answers 400 before the handler.
+    def strip_read_only(params)
+      keys = @request_body.respond_to?(:read_only_keys) ? @request_body&.read_only_keys : nil
+      return if keys.nil? || keys.empty?
+
+      keys.each do |key|
+        params.delete(key.to_sym)
+        params.delete(key.to_s)
+      end
     end
 
     # @return [Array(Hash, Hash | nil, Boolean)] [params, errors, unprocessable]

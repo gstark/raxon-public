@@ -40,6 +40,14 @@ module Raxon
           #   @return [Boolean] Whether the value can be null (default: false)
           option :nullable, default: proc { false }
 
+          # @!attribute [r] read_only
+          #   @return [Boolean] Whether the value is server-managed and never
+          #     accepted from a request (default: false). Emitted as
+          #     +readOnly: true+. At request time a read-only property is
+          #     removed from the resolved body schema and stripped from params
+          #     before the handler runs — see {RequestBodyResolver}.
+          option :read_only, default: proc { false }
+
           # @!attribute [r] format
           #   @return [String, Symbol, nil] OpenAPI string format
           option :format, optional: true

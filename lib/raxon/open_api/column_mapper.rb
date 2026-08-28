@@ -11,6 +11,14 @@ module Raxon
       # emission time.
       SQL_ELEMENT_FORMATS = {datetime: :date_time, date: :date}.freeze
 
+      # Columns the server owns: generated keys and lifecycle timestamps. A
+      # from_resource/from_table property for one of these is marked
+      # +read_only+, so the document emits +readOnly: true+ and a request body
+      # referencing the component strips the value instead of accepting it. An
+      # explicit block declaration for the same attribute wins (the block runs
+      # first and introspection skips declared names).
+      READ_ONLY_COLUMNS = %w[id created_at updated_at deleted_at].freeze
+
       module_function
 
       # Build a property from an Alba association.
@@ -33,6 +41,7 @@ module Raxon
       # @return [void]
       def build_column_property(component, attribute_name, column, allowable_values: nil)
         property_options = build_property_options(column.sql_type, column.array, column.comment.to_s, column.null, allowable_values)
+        property_options[:read_only] = true if READ_ONLY_COLUMNS.include?(attribute_name.to_s)
         component.property attribute_name, **property_options
       end
 

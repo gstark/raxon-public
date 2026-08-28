@@ -508,17 +508,29 @@ module Raxon
       def request_schema
         return @request_schema if @request_schema || @request_schema_generated
 
-        @request_schema = Raxon::OpenApi::RequestSchemaGenerator.new(@parameters, @request_body).to_dry_schema
+        @request_schema = Raxon::OpenApi::RequestSchemaGenerator.new(@parameters, resolved_request_body).to_dry_schema
         @request_schema_generated = true
         @request_schema
       end
 
+      # The request body for request-time use: component references inlined
+      # and read-only properties removed (see {RequestBodyResolver}).
+      # {#request_body} keeps the declaration untouched for document emission.
+      #
+      # @return [RequestBody, nil]
+      def resolved_request_body
+        return @resolved_request_body if defined?(@resolved_request_body)
+
+        @resolved_request_body = Raxon::OpenApi::RequestBodyResolver.new.call(@request_body)
+      end
+
       # Whether this endpoint declares anything to validate, answered from the
-      # declarations without compiling the schema.
+      # declarations without compiling the schema. An `as:`-only body counts:
+      # it resolves to component properties when the schema is compiled.
       #
       # @return [Boolean]
       def request_schema?
-        @parameters.parameters.any? || @request_body&.properties&.any? || false
+        @parameters.parameters.any? || !!(@request_body && (@request_body.properties.any? || @request_body.as)) || false
       end
 
       # Generate Dry::Schema validators for this endpoint's responses.
@@ -613,6 +625,7 @@ module Raxon
       def invalidate_request_schema
         @request_schema = nil
         @request_schema_generated = false
+        remove_instance_variable(:@resolved_request_body) if defined?(@resolved_request_body)
       end
 
       # Drop the memoized response schemas so the next read rebuilds them. Called

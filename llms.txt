@@ -101,6 +101,11 @@ raises at load with the valid list.
 Constraints travel with the declaration: `required:`, `nullable:`, `enum:`,
 `min_length:`/`max_length:`, `minimum:`/`maximum:`, `pattern:`,
 `min_items:`/`max_items:`, and for uploads `max_size:`/`allowed_extensions:`.
+`read_only: true` marks a server-managed field: it is documented as `readOnly`,
+never required in a request, and stripped from `request.params` if a client
+sends it. A request body may reference a component (`body type: :object, as:
+:UserInput`) and validates exactly as if the component's properties were
+declared inline.
 
 ## Lifecycle order
 

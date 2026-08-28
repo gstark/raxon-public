@@ -140,6 +140,7 @@ end
 - `as` - Reference to component schema
 - `enum` or `allowable_values` - Array of allowed values
 - `nullable` - Whether property can be null
+- `read_only` - Server-managed field. Emitted as `readOnly: true`; removed from request validation and stripped from `request.params` by the resolution pipeline below. `from_resource`/`from_table` set it for columns named in `ColumnMapper::READ_ONLY_COLUMNS` (`id`, `created_at`, `updated_at`, `deleted_at`); a block declaration for the same attribute opts out.
 - `max_size` - For `type: :file`, maximum bytes for that upload. Exceeding it answers 413. Emitted as `maxLength` on the binary schema. (Not `max_length`, which means string length.)
 - `allowed_extensions` - For `type: :file`, permitted filename extensions without the leading dot, e.g. `%w[jpg png]`. Matched case-insensitively; a violation answers 422 (well-formed request, unacceptable content) while a malformed request stays 400. Runtime-only (no OpenAPI keyword). Named this way because `extensions` means OpenAPI specification extensions. Matches the client-supplied filename, so it is not proof of content — see [docs/security.md](docs/security.md).
 - `extensions` - Hash of OpenAPI specification extensions merged into the emitted schema, e.g. `{"x-ts-type" => "Dayjs"}`. Keys must start with `x-` (raises otherwise). Also accepted by `Parameter`, `Response`, `Component`, and `RequestBody`. Not emitted next to `$ref`. To apply an extension to every schema of a DSL type (including `from_resource`/`from_table` output), set `config.openapi_type_extensions = {datetime: {"x-ts-type" => "Dayjs"}}`; explicit `extensions:` win on key conflicts.
@@ -162,6 +163,22 @@ end
 endpoint.response 200, type: :object, as: :User
 endpoint.response 200, type: :array, of: :User  # Array of users
 ```
+
+#### Request-Time Component Resolution
+
+A request body declared with `as:` (or with nested `as:`/component `of:`
+properties) is resolved by `OpenApi::RequestBodyResolver` when the request
+schema is first compiled: component properties are inlined (recursively,
+cycle-safe), `read_only` properties are removed, and the resolved copy carries
+`read_only_keys` so `ParamResolver` strips client-supplied values for
+server-managed fields. The resolved body is what `RequestSchemaGenerator`,
+`ParamResolver`, `RequestBodyCoercer`, and `FileUploadValidator` consume —
+an `as:` body validates and strips exactly like the same properties declared
+inline. The declaration itself is never mutated; document emission keeps the
+`$ref` (`Endpoint#request_body` is the declaration, `#resolved_request_body`
+is the runtime view, on both `Endpoint` and `EffectiveEndpoint`). An `as:`
+naming an unknown component raises at compile; an unknown `of:` stays lenient
+(unconstrained array), matching emission.
 
 #### Auto-Generation from Resources
 

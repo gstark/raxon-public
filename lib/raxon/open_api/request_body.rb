@@ -74,6 +74,14 @@ module Raxon
       #   @return [Hash] Hash of property definitions
       option :properties, default: proc { {} }
 
+      # @!attribute [rw] read_only_keys
+      #   @return [Array<Symbol>, nil] Top-level property names removed as
+      #     +read_only+ during request resolution. Set only on the resolved
+      #     copy built by {RequestBodyResolver}; ParamResolver deletes these
+      #     keys from the params so a client-supplied value for a
+      #     server-managed field never reaches the handler.
+      attr_accessor :read_only_keys
+
       # Construct a request body, rejecting any unknown option (see {StrictOptions}).
       #
       # @param options [Hash] request body configuration options

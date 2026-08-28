@@ -237,6 +237,43 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_resource" do
     end
   end
 
+  describe "read-only inference" do
+    it "marks server-managed columns read_only and leaves the rest writable" do
+      resource = Class.new do
+        include Alba::Resource
+
+        attributes :id, :name, :created_at, :updated_at, :deleted_at
+      end
+      model = fake_model(
+        "id" => column("bigint"),
+        "name" => column("text"),
+        "created_at" => column("timestamp(6) without time zone"),
+        "updated_at" => column("timestamp(6) without time zone"),
+        "deleted_at" => column("timestamp(6) without time zone", null: true)
+      )
+
+      properties = properties_for(:User, resource, model)
+
+      expect(properties.filter_map { |name, property| name if property.read_only })
+        .to contain_exactly(:id, :created_at, :updated_at, :deleted_at)
+    end
+
+    it "lets a block declaration opt a column back out of read_only" do
+      resource = Class.new do
+        include Alba::Resource
+
+        attributes :id
+      end
+      model = fake_model("id" => column("bigint"))
+
+      properties = properties_for(:User, resource, model) do |component|
+        component.property :id, type: :integer
+      end
+
+      expect(properties[:id].read_only).to be(false)
+    end
+  end
+
   describe "database availability" do
     it "generates no database properties when the table is missing" do
       resource = Class.new do

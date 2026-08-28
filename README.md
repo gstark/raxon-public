@@ -882,6 +882,38 @@ body.property :metadata            # any JSON value
 body.property :mode, enum: %w[a b] # any value, but must be "a" or "b"
 ```
 
+#### Sharing a Body Schema Through a Component
+
+A request body can reference a registered component instead of declaring
+properties inline:
+
+```ruby
+endpoint.body type: :object, as: :UserInput
+```
+
+The reference is resolved when the request schema is first compiled: the
+component's properties validate, coerce, and strip exactly as if they were
+declared inline. Nested `as:` properties and `of:` component arrays resolve
+too, and inline properties declared alongside `as:` win by name. The generated
+document keeps the `$ref`. An `as:` naming an unknown component raises.
+
+#### Read-Only Properties
+
+Mark server-managed fields with `read_only: true`:
+
+```ruby
+body.property :name, type: :string
+body.property :created_at, type: :datetime, read_only: true
+```
+
+A read-only property is emitted as `readOnly: true`, is never required in a
+request, and a client-supplied value for it is stripped from `request.params`
+before the handler runs — a client cannot set `deleted_at` by sneaking it into
+the body. `from_resource`/`from_table` mark `id`, `created_at`, `updated_at`,
+and `deleted_at` columns read-only automatically (declare the attribute in the
+block to opt out), so a database-derived component is safe to reference from a
+request body.
+
 ### File Uploads
 
 Handle file uploads by declaring properties with `type: :file`. Raxon automatically wraps Rack multipart hashes into `Raxon::UploadedFile` objects:
@@ -1102,6 +1134,9 @@ end
 # Reference in responses
 endpoint.response 200, type: :object, as: :User
 endpoint.response 200, type: :array, of: :User  # Array of users
+
+# Reference in a request body (see "Sharing a Body Schema Through a Component")
+endpoint.body type: :object, as: :User
 ```
 
 ### Specification Extensions
@@ -1152,7 +1187,7 @@ Raxon::OpenApi::DSL.from_resource(:User, UserResource, User) do |component|
 end
 ```
 
-Each resource attribute becomes a property typed from its database column (nullability from the column, description from the column comment, enums from ActiveRecord inclusion validators; Alba associations become arrays referencing the associated component).
+Each resource attribute becomes a property typed from its database column (nullability from the column, description from the column comment, enums from ActiveRecord inclusion validators; Alba associations become arrays referencing the associated component). Columns named `id`, `created_at`, `updated_at`, or `deleted_at` are marked `read_only: true` — emitted as `readOnly` and stripped from request bodies that reference the component.
 
 For tables with no model class — a ROM relation's table, for example — use `from_table` with the table name:
 

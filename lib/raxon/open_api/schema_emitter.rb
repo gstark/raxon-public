@@ -299,6 +299,7 @@ module Raxon
         metadata[:minItems] = property.min_items if schema_metadata_present?(property, :min_items)
         metadata[:maxItems] = property.max_items if schema_metadata_present?(property, :max_items)
         metadata[:uniqueItems] = property.unique_items if schema_metadata_present?(property, :unique_items)
+        metadata[:readOnly] = true if property.respond_to?(:read_only) && property.read_only
         metadata.merge!(schema_extensions(property))
         metadata
       end

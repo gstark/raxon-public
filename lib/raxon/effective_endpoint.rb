@@ -24,7 +24,14 @@ module Raxon
       freeze
     end
 
+    # The declared request body, as the route file defined it (an `as:`
+    # reference stays a reference — document emission needs the +$ref+).
     def request_body = leaf.request_body
+
+    # The request body as ParamResolver and the coercers consume it: component
+    # references inlined and read-only properties removed, resolved lazily by
+    # {RequestSchema}.
+    def resolved_request_body = @request_schema.request_body
 
     # The compiled request schema, or nil when the endpoint declares nothing to
     # validate. Compiled on first use — see {RequestSchema}.
@@ -62,22 +69,45 @@ module Raxon
     class RequestSchema
       def initialize(parameters, request_body)
         @parameters = parameters
-        @request_body = request_body
+        @declared_request_body = request_body
         @mutex = Mutex.new
       end
 
-      # @return [Boolean] whether any parameter or body property is declared
+      # @return [Boolean] whether any parameter or body property is declared.
+      #   A body that is only an `as:` reference counts: it resolves to
+      #   component properties once the schema is actually needed.
       def declared?
-        @parameters.parameters.any? || @request_body&.properties&.any? || false
+        @parameters.parameters.any? ||
+          !!(@declared_request_body && (@declared_request_body.properties.any? || @declared_request_body.as)) ||
+          false
+      end
+
+      # The resolved request body (component references inlined, read-only
+      # properties removed). Resolved on first use alongside the schema:
+      # components register while the app loads, so resolving at route-load
+      # time would race their declaration order.
+      #
+      # @return [Raxon::OpenApi::RequestBody, nil]
+      def request_body
+        return nil if @declared_request_body.nil?
+
+        resolve unless defined?(@request_body)
+        @request_body
       end
 
       # @return [Dry::Schema::Params, FileUploadValidator, nil]
       def schema
-        return @schema if defined?(@schema)
+        resolve unless defined?(@schema)
+        @schema
+      end
 
+      private
+
+      def resolve
         @mutex.synchronize do
-          next @schema if defined?(@schema)
+          next if defined?(@schema)
 
+          @request_body = OpenApi::RequestBodyResolver.new.call(@declared_request_body)
           @schema = OpenApi::RequestSchemaGenerator.new(@parameters, @request_body).to_dry_schema
         end
       end
