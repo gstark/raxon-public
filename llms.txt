@@ -140,6 +140,7 @@ bundle exec raxon generate route api/v1/users/__id__ get
 - [README](README.md): full reference — routing, the OpenAPI DSL, validation, handler helpers, hooks, HTML rendering, test helpers, and every configuration option.
 - [Request lifecycle](docs/lifecycle.md): exact order of metadata, before, handler, after, and where `halt` and `rescue_from` cut in.
 - [Path parameters](docs/path_parameters.md): the `__name__` and `$name` directory forms, and how parameters reach `request.params`.
+- [Streaming responses](docs/streaming.md): `response.stream` and `response.sse` for chunked bodies and Server-Sent Events, what the lifecycle skips for a stream, and how to declare the response in OpenAPI.
 - [File uploads](docs/file_uploads.md): `type: :file`, the `UploadedFile` interface, and declaring `max_size` / `max_total_size` / `allowed_extensions`.
 - [Security model](docs/security.md): what Raxon guarantees and what it does not — trusted route files, request size limits, ReDoS handling, upload caveats, proxy headers, and error-log safety. Read before exposing an app publicly.
 

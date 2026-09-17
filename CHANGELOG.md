@@ -26,6 +26,20 @@ release.
   - Prevents malformed JSON from reaching handlers
 - Code complexity analysis tool (flog) with rake task
 - Enhanced Server middleware support for keyword arguments
+- Streaming responses. `response.stream(content_type:) { |out| ... }` records a
+  block that runs inside the Rack body's `each`, after the status and headers
+  are on the wire; each `out.write` reaches the client at once. The Router
+  returns a `Raxon::StreamingBody` with no Content-Length, which swallows
+  client-disconnect errors (`IOError`, `EPIPE`, `ECONNRESET`) and always closes.
+  Response validation and `handle` return-value mapping skip a streaming
+  response; a HEAD served by a GET route never runs the block.
+  `response.sse { |events| ... }` layers Server-Sent Events on top with a
+  `Raxon::SSE` writer (`event`, `data`, `comment`) that formats the protocol and
+  JSON-encodes non-String payloads. See docs/streaming.md.
+- A typeless response with a non-JSON `content_type:` (e.g.
+  `response 200, content_type: "text/event-stream"`) is now emitted with its
+  media type under `content` and no schema. Previously the content type was
+  dropped along with the absent schema.
 
 ### Changed
 

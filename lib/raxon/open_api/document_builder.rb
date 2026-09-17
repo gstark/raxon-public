@@ -19,6 +19,9 @@ module Raxon
     #   DocumentBuilder.new(specification).build
     #
     class DocumentBuilder
+      DEFAULT_CONTENT_TYPE = "application/json"
+      private_constant :DEFAULT_CONTENT_TYPE
+
       # Convert a status code symbol or integer to its numeric code.
       #
       # Uses Raxon::Response::STATUS_CODES for symbol lookup.
@@ -200,11 +203,15 @@ module Raxon
         object = {description: description, headers: {}}
 
         # A body-less response (e.g. a 204) declares no schema and must not carry
-        # a content object; OpenAPI forbids content for 204/304.
-        unless response_body_absent?(response)
+        # a content object; OpenAPI forbids content for 204/304. A typeless
+        # response with a non-JSON content type (a streamed text/event-stream
+        # body, say) still names its media type, with no schema.
+        if !response_body_absent?(response)
           object[:content] = {
             response.content_type => {schema: SchemaEmitter.schema_without_description(response)}
           }
+        elsif response.content_type != DEFAULT_CONTENT_TYPE
+          object[:content] = {response.content_type => {}}
         end
 
         object

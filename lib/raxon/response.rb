@@ -94,6 +94,7 @@ module Raxon
       @status = 200
       @headers = {"content-type" => "application/json"}
       @custom_body = nil
+      @stream_block = nil
       @halted = false
       @endpoint = endpoint
       @request = nil
@@ -253,6 +254,59 @@ module Raxon
       @endpoint.erb_template.render(locals)
     end
 
+    # Stream the body instead of buffering it.
+    #
+    # Records the block and sets the content type. The block does not run here:
+    # it runs inside the Rack body's +each+, after the status and headers have
+    # been sent, and every +out.write+ reaches the client at once. After blocks
+    # still run first, so they can set headers but cannot see the streamed
+    # bytes. Response validation and return-value mapping skip a streaming
+    # response. See docs/streaming.md.
+    #
+    # @param content_type [String] The media type of the streamed body
+    # @yieldparam out [Raxon::StreamingBody::Writer] Call +write+ once per chunk
+    # @return [Response] self for chaining
+    # @raise [ArgumentError] Without a block
+    # @raise [Raxon::Error] When a body is already set; a response is streamed or buffered, not both
+    #
+    # @example
+    #   response.stream(content_type: "text/plain") do |out|
+    #     rows.each { |row| out.write("#{row}\n") }
+    #   end
+    def stream(content_type:, &block)
+      raise ArgumentError, "stream requires a block" unless block
+      raise Raxon::Error, "Cannot stream a response that already has a body" unless @custom_body.nil?
+
+      header "content-type", content_type
+      @stream_block = block
+      self
+    end
+
+    # Stream Server-Sent Events. Sets +text/event-stream+ and
+    # +cache-control: no-cache+, and yields a {Raxon::SSE} writer.
+    #
+    # @yieldparam events [Raxon::SSE]
+    # @return [Response] self for chaining
+    #
+    # @example
+    #   response.sse do |events|
+    #     completion.each_token { |token| events.event("token", {text: token}) }
+    #     events.event("done", {})
+    #   end
+    def sse(&block)
+      raise ArgumentError, "sse requires a block" unless block
+
+      header "cache-control", "no-cache"
+      stream(content_type: "text/event-stream") { |out| block.call(Raxon::SSE.new(out)) }
+    end
+
+    # Whether #stream (or #sse) has been called.
+    #
+    # @return [Boolean]
+    def streaming?
+      !@stream_block.nil?
+    end
+
     # Get the current status code.
     # Delegates to Rack::Response#status
     #
@@ -366,6 +420,8 @@ module Raxon
     #
     # @return [Array] Rack response array [status, headers, body]
     def to_rack
+      return streaming_rack_response if streaming?
+
       if @rack_response
         # If a custom body was set, serialize it and write to Rack response
         if @custom_body
@@ -437,6 +493,19 @@ module Raxon
     def serialized_custom_body
       data = serializable_body
       data.is_a?(String) ? data : JSON.generate(data)
+    end
+
+    # The Rack tuple for a streaming response. Bypasses Rack::Response#finish:
+    # Rack's buffered body would carry a Content-Length, and any Content-Length
+    # on a stream makes the server cut the connection at that many bytes.
+    # Headers are read from wherever they live (the plain hash, or the
+    # Rack::Response when cookies or a redirect created one) so set-cookie and
+    # after-block headers still go out.
+    def streaming_rack_response
+      rack_headers = headers.to_h.dup
+      rack_headers.delete("content-length")
+
+      [code, rack_headers, Raxon::StreamingBody.new(&@stream_block)]
     end
 
     # Apply the body serializer to a value and, where the result is a Hash or

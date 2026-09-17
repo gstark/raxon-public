@@ -743,6 +743,33 @@ Raxon.route do |endpoint|
 end
 ```
 
+### Streaming Responses
+
+`response.stream` sends the status and headers first and produces the body chunk by chunk while its block runs. `response.sse` layers Server-Sent Events on top:
+
+```ruby
+# routes/api/v1/chat/post.rb
+Raxon.route do
+  body type: :object do
+    property :prompt, type: :string
+  end
+  response 200, content_type: "text/event-stream"
+
+  handler do |request, response, metadata|
+    response.sse do |events|
+      completion(request.params[:prompt]).each_token do |token|
+        events.event("token", {text: token})
+      end
+      events.event("done", {})
+    end
+  end
+end
+```
+
+The block runs after the after blocks, inside the Rack body, so the Router never sets a Content-Length and a closed tab does not raise into the server. Response validation and `handle` return-value mapping skip a streaming response.
+
+See the [Streaming Responses guide](docs/streaming.md) for the SSE writer, error handling inside a stream, proxy notes, and testing.
+
 ## HTTP Semantics
 
 Raxon answers protocol-level requests correctly without any per-route code:

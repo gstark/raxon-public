@@ -175,6 +175,9 @@ module Raxon
     end
 
     def map_handler_result(result, response)
+      # A handle block that streamed returns whatever its last expression was
+      # (often the response itself); that is not a body.
+      return if response.streaming?
       return if result.nil?
       if result.is_a?(Raxon::Outcome)
         response.code = result.status
@@ -265,6 +268,9 @@ module Raxon
       # compile one.
       validation_mode = response_validation_mode
       return if validation_mode == false
+      # A streamed body does not exist yet; it is produced after this pipeline
+      # returns, chunk by chunk, so there is nothing to check against a schema.
+      return if response.streaming?
       return unless response.body
 
       status_code = response.status_code

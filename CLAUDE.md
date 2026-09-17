@@ -117,6 +117,7 @@ end
 - `of` - For array types, the element type
 - `description` - Response documentation
 - `nullable` - Whether response can be null
+- `content_type` - Media type key under `content` (default `application/json`). A typeless response with a non-JSON content type is emitted as that media type with no schema, which is how a streamed `text/event-stream` route is documented.
 - Inline `property` definitions
 
 #### Property-level Metadata
@@ -287,6 +288,10 @@ end
 ```
 
 See [docs/path_parameters.md](docs/path_parameters.md) for complete documentation.
+
+### Streaming Responses
+
+`Response#stream(content_type:)` records a block and marks the response as streaming; `Response#to_rack` then returns `[status, headers, Raxon::StreamingBody]` and bypasses `Rack::Response#finish` so no Content-Length is emitted. The block runs inside `StreamingBody#each`, after the after blocks. `EndpointInvocation` skips return-value mapping and response validation when `response.streaming?`. `Response#sse` wraps `stream` with `Raxon::SSE`, the Server-Sent Events writer. See [docs/streaming.md](docs/streaming.md).
 
 ### Request Metadata
 

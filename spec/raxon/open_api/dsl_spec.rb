@@ -777,6 +777,34 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(content["text/csv"]["schema"]).to include("type" => "string")
     end
 
+    it "emits a typeless response with a custom content_type as a media type without a schema" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:get)
+        endpoint.path("/api/v1/events")
+
+        endpoint.response(200, content_type: "text/event-stream")
+      end
+
+      spec = described_class.to_open_api
+      response = spec["paths"]["/api/v1/events"]["get"]["responses"]["200"]
+
+      expect(response["content"]).to eq({"text/event-stream" => {}})
+    end
+
+    it "emits no content for a typeless response with the default content_type" do
+      described_class.endpoint do |endpoint|
+        endpoint.operation(:delete)
+        endpoint.path("/api/v1/events")
+
+        endpoint.response(204)
+      end
+
+      spec = described_class.to_open_api
+      response = spec["paths"]["/api/v1/events"]["delete"]["responses"]["204"]
+
+      expect(response).not_to have_key("content")
+    end
+
     it "puts nullable on array schemas instead of array items" do
       Raxon.configuration.openapi_spec_version = "3.0"
       described_class.endpoint do |endpoint|
