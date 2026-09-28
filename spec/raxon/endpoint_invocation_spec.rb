@@ -1,0 +1,335 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+
+# These specs drive endpoint invocation through its seam: a handler endpoint, a
+# hierarchy, a request double, and a real Response. The request-validation,
+# dispatch, response-validation, and lifecycle-ordering rules live here and are
+# tested here — no Rack env, no Router, no full app boot.
+RSpec.describe Raxon::EndpointInvocation do
+  # A request double standing in for Raxon::Request. endpoint_context returns nil
+  # so blocks run via plain #call (no route-file context needed).
+  def fake_request(params: {}, json_parse_error: false, validation_errors: nil, validation_unprocessable: false)
+    double(
+      "request",
+      params: params,
+      json_parse_error: json_parse_error,
+      validation_errors: validation_errors,
+      validation_unprocessable?: validation_unprocessable
+    ).tap { |r| allow(r).to receive(:endpoint_context).and_return(nil) }
+  end
+
+  def run(handler_endpoint, endpoints: nil, request: fake_request, response: Raxon::Response.new, metadata: {})
+    invocation = described_class.new(handler_endpoint, endpoints || [handler_endpoint])
+    invocation.run(request, response, metadata)
+    invocation.validate_response(request, response)
+    response
+  end
+
+  describe "request validation" do
+    it "returns 400 without running the handler when the JSON body is unparseable" do
+      ran = false
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.handler { |_req, _res, _meta| ran = true }
+
+      response = run(endpoint, request: fake_request(json_parse_error: true))
+
+      expect(response.status_code).to eq(400)
+      expect(response.body).to eq(error: "Invalid JSON in request body")
+      expect(ran).to be(false)
+    end
+
+    it "returns 400 with details without running the handler when validation fails" do
+      ran = false
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.handler { |_req, _res, _meta| ran = true }
+
+      response = run(endpoint, request: fake_request(validation_errors: {id: ["is missing"]}))
+
+      expect(response.status_code).to eq(400)
+      expect(response.body).to eq(error: "Validation failed", details: {id: ["is missing"]})
+      expect(ran).to be(false)
+    end
+
+    it "returns 422 when the failure is a content rejection rather than a malformed request" do
+      ran = false
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.handler { |_req, _res, _meta| ran = true }
+
+      response = run(endpoint, request: fake_request(
+        validation_errors: {photo: ["must be one of the allowed file types: jpg"]},
+        validation_unprocessable: true
+      ))
+
+      expect(response.status_code).to eq(422)
+      expect(response.body).to eq(
+        error: "Validation failed",
+        details: {photo: ["must be one of the allowed file types: jpg"]}
+      )
+      expect(ran).to be(false)
+    end
+  end
+
+  describe "handler dispatch" do
+    it "runs the handler on a valid request" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.handler { |req, res, _meta| res.body = {echo: req.params[:name]} }
+
+      response = run(endpoint, request: fake_request(params: {name: "Ada"}))
+
+      expect(response.body).to eq(echo: "Ada")
+    end
+
+    it "does nothing for an endpoint with no handler" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      response = run(endpoint)
+
+      expect(response.body).to be_nil
+    end
+  end
+
+  describe "response validation" do
+    # Response validation is opt-in and off by default; these specs are about
+    # what it does once turned on.
+    before { Raxon.configure { |config| config.response_validation = :error_response } }
+
+    it "rewrites a schema-violating response to 500 (error_response mode)" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handler do |_req, res, _meta|
+        res.code = :ok
+        res.body = {wrong: "field"} # missing required :id
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+      expect(response.body[:status_code]).to eq(200)
+    end
+
+    it "rewrites a response carrying an undeclared field to 500" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handler do |_req, res, _meta|
+        res.code = :ok
+        res.body = {id: 1, password_digest: "$2a$12$..."}
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+    end
+
+    it "leaves a schema-conforming response untouched" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handler do |_req, res, _meta|
+        res.code = :ok
+        res.body = {id: 7}
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(200)
+      expect(response.body).to eq(id: 7)
+    end
+
+    # Regression: response_schemas was keyed by the declared status (a symbol for
+    # exception_error / response :unprocessable_entity), but the lookup used the
+    # integer Response#status_code, so symbol-declared responses were never
+    # validated. Keys are now normalized to integers.
+    it "validates a response declared with a symbol status" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.exception_error # :unprocessable_entity (422), body shape {error: string}
+      endpoint.handler do |_req, res, _meta|
+        res.code = :unprocessable_entity
+        res.body = {errors: ["wrong shape"]} # missing required :error string
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+      expect(response.body[:status_code]).to eq(422)
+    end
+
+    it "leaves a conforming symbol-status response untouched" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.exception_error
+      endpoint.handler do |_req, res, _meta|
+        res.code = :unprocessable_entity
+        res.body = {error: "bad input"}
+      end
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(422)
+      expect(response.body).to eq(error: "bad input")
+    end
+
+    # config.body_serializer runs before validation, so a handler that returns a
+    # serializer object is validated against the data it becomes, not the object.
+    it "validates the serialized form of a returned serializer object" do
+      serializer = Struct.new(:data) do
+        def serializable_hash = data
+      end
+      Raxon.configure { |c| c.body_serializer = ->(b) { b.is_a?(serializer) ? b.serializable_hash : b } }
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| serializer.new({id: 7}) }
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(200)
+      expect(response.serializable_body).to eq(id: 7)
+    ensure
+      Raxon.configuration.body_serializer = nil
+    end
+
+    it "flags a returned serializer whose data violates the schema" do
+      serializer = Struct.new(:data) do
+        def serializable_hash = data
+      end
+      Raxon.configure { |c| c.body_serializer = ->(b) { b.is_a?(serializer) ? b.serializable_hash : b } }
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| serializer.new({wrong: "field"}) }
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+    ensure
+      Raxon.configuration.body_serializer = nil
+    end
+    it "runs the body serializer once for validation and encoding" do
+      calls = 0
+      Raxon.configure do |c|
+        c.body_serializer = ->(b) {
+          calls += 1
+          b
+        }
+      end
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| {id: 7} }
+
+      response = run(endpoint)
+      after_validation = calls
+      _status, _headers, body = response.to_rack
+
+      expect(after_validation).to be > 0
+      expect(calls).to eq(after_validation)
+      expect(body.join).to eq(%({"id":7}))
+    ensure
+      Raxon.configuration.body_serializer = nil
+    end
+
+    it "encodes a change an after block makes to the body in place" do
+      serializer = Struct.new(:data) do
+        def serializable_hash = data
+      end
+      Raxon.configure { |c| c.body_serializer = ->(b) { b.is_a?(serializer) ? b.serializable_hash : b } }
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :item, type: :object, required: true
+        resp.property :meta, type: :string, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| {item: serializer.new({id: 7})} }
+      endpoint.after { |_req, res, _meta| res.body[:meta] = "added" }
+
+      _status, _headers, body = run(endpoint).to_rack
+
+      expect(JSON.parse(body.join)).to eq("item" => {"id" => 7}, "meta" => "added")
+    ensure
+      Raxon.configuration.body_serializer = nil
+    end
+
+    it "validates the body an after block leaves" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| {id: 7} }
+      endpoint.after { |_req, res, _meta| res.body = {id: "seven"} }
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+    end
+
+    it "does not validate when the handler did not run" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 400, type: :object do |resp|
+        resp.property :unrelated, type: :string, required: true
+      end
+      endpoint.handler { |_req, _res, _meta| raise "not reached" }
+
+      response = run(endpoint, request: fake_request(json_parse_error: true))
+
+      expect(response.status_code).to eq(400)
+      expect(response.body).to eq(error: "Invalid JSON in request body")
+    end
+  end
+
+  describe "lifecycle ordering across a hierarchy" do
+    it "runs metadata and before parent→child, the handler, then after child→parent" do
+      order = []
+      parent = Raxon::OpenApi::Endpoint.new
+      parent.metadata { |_req, _res, _meta| order << :parent_metadata }
+      parent.before { |_req, _res, _meta| order << :parent_before }
+      parent.after { |_req, _res, _meta| order << :parent_after }
+
+      child = Raxon::OpenApi::Endpoint.new
+      child.metadata { |_req, _res, _meta| order << :child_metadata }
+      child.before { |_req, _res, _meta| order << :child_before }
+      child.after { |_req, _res, _meta| order << :child_after }
+      child.handler { |_req, _res, _meta| order << :handler }
+
+      run(child, endpoints: [parent, child])
+
+      expect(order).to eq([
+        :parent_metadata, :child_metadata,
+        :parent_before, :child_before,
+        :handler,
+        :child_after, :parent_after
+      ])
+    end
+
+    it "lets a before block halt, skipping the handler and after blocks" do
+      ran_handler = false
+      ran_after = false
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.before { |_req, res, _meta| res.halt(code: :forbidden) }
+      endpoint.handler { |_req, _res, _meta| ran_handler = true }
+      endpoint.after { |_req, _res, _meta| ran_after = true }
+
+      response = Raxon::Response.new
+      expect {
+        described_class.new(endpoint, [endpoint]).run(fake_request, response, {})
+      }.to raise_error(Raxon::HaltException)
+
+      expect(ran_handler).to be(false)
+      expect(ran_after).to be(false)
+    end
+  end
+end

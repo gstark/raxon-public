@@ -1,0 +1,171 @@
+# frozen_string_literal: true
+
+require_relative "error"
+
+module Raxon
+  module OpenApi
+    # Validation and normalization of the values a DSL declaration can carry:
+    # `type:`, `content_type:`, and `extensions:`, plus the mapping from Raxon's
+    # convenience types to OpenAPI string formats.
+    #
+    # Every DSL class (Property, Parameter, Response, Component, RequestBody)
+    # routes its option coercion through here, so a typo is rejected at
+    # definition time rather than emitting an invalid document.
+    module TypeSystem
+      # The declared `type:` values Raxon understands: the scalar/structural
+      # types, the string-format conveniences (including the datetime aliases
+      # date_time/Dayjs handled by standard_format_for_type), :file for uploads,
+      # and :multipart for form-data request bodies. A `type:` may also be an
+      # Array of these (emitted as anyOf). Note this is distinct from `of:`/`as:`,
+      # which name a component and are not validated here.
+      KNOWN_TYPES = %i[
+        string number integer boolean object array file multipart
+        datetime date_time Dayjs date uuid email
+      ].freeze
+
+      module_function
+
+      # Process and normalize a type specification.
+      #
+      # Converts Ruby symbols and types to OpenAPI-compatible string types.
+      # Handles both simple types and array specifications.
+      #
+      # @param type [Symbol, String, Array] The type to process
+      # @return [String, Array] The processed type
+      #
+      # @example
+      #   process_type(:string)   # => "string"
+      #   process_type(:number)   # => "number"
+      #   process_type([:string, :number])  # => [:string, :number]
+      #
+      def process_type(type)
+        case type
+        when Array
+          type
+        when :number
+          "number"
+        when :integer
+          "integer"
+        when :string
+          "string"
+        when :boolean
+          "boolean"
+        when :object
+          "object"
+        when :array
+          "array"
+        else
+          type.to_s
+        end
+      end
+
+      # Validate and process a declared `type:` value, rejecting anything that is
+      # not a known type (or an Array of known types). Surfaces a typo like
+      # `type: :strng` at definition time — with the set of valid types — instead
+      # of emitting an invalid document and failing confusingly at runtime.
+      #
+      # @param type [Symbol, String, Array, nil]
+      # @return [String, Array, nil] the processed type
+      # @raise [Error] when a type is not recognized
+      def process_type_option(type)
+        Array(type).each do |member|
+          next if KNOWN_TYPES.include?(member.to_s.to_sym)
+
+          raise Error, "Unknown type #{member.inspect}. Known types: #{KNOWN_TYPES.join(", ")}."
+        end
+
+        process_type(type)
+      end
+
+      # Validate a declared `content_type:` value. Media types are open-ended, so
+      # rather than an allowlist this just rejects the obvious mistakes — a
+      # non-String, or a value with no "type/subtype" shape (e.g. `:json`,
+      # `"json"`) — which would otherwise emit an invalid content key.
+      #
+      # @param value [Object]
+      # @return [String] the value unchanged
+      # @raise [Error] when the value is not a media-type string
+      def process_content_type(value)
+        unless value.is_a?(String) && value.include?("/")
+          raise Error, "Invalid content_type #{value.inspect}. Expected a media type string like \"application/json\" or \"text/csv\"."
+        end
+
+        value
+      end
+
+      # Validate and normalize an OpenAPI specification-extensions hash.
+      #
+      # OpenAPI requires specification extension keys to start with "x-"; any
+      # other key raises immediately (see the No Silent Fallbacks tenet). Keys
+      # are normalized to strings so explicit extensions and configured
+      # type-level extensions merge predictably.
+      #
+      # @param extensions [Hash] Extension keys/values (e.g. {"x-ts-type" => "Dayjs"})
+      # @return [Hash] The extensions with string keys
+      # @raise [ArgumentError] When extensions is not a Hash or a key lacks the "x-" prefix
+      def process_extensions(extensions)
+        raise ArgumentError, "extensions must be a Hash, got #{extensions.class}" unless extensions.is_a?(Hash)
+
+        extensions.each_key do |key|
+          next if key.to_s.start_with?("x-")
+
+          raise ArgumentError,
+            "Invalid specification extension key: #{key.inspect}. " \
+            "OpenAPI specification extension keys must start with \"x-\"."
+        end
+
+        extensions.transform_keys(&:to_s)
+      end
+
+      # Configured specification extensions for a DSL type name.
+      #
+      # Reads Raxon.configuration.openapi_type_extensions, which maps DSL type
+      # names (e.g. :datetime, :date) to extension hashes applied to every
+      # schema emitted with that type — including schemas generated by
+      # from_resource/from_table, where there is no call site to pass
+      # +extensions:+ explicitly.
+      #
+      # @param type [String, Symbol, Array, nil] The processed DSL type
+      # @return [Hash] Extensions with string keys, empty when none configured
+      def type_extensions_for(type)
+        return {} unless type.is_a?(String) || type.is_a?(Symbol)
+
+        configured = Raxon.configuration.openapi_type_extensions
+        return {} unless configured&.any?
+
+        extensions = configured[type.to_sym] || configured[type.to_s]
+        extensions ? process_extensions(extensions) : {}
+      end
+
+      # Return a standard OpenAPI string format for convenience date/email/UUID types.
+      #
+      # @param type [String, Symbol]
+      # @return [String, nil]
+      def standard_format_for_type(type)
+        case type.to_s
+        when "datetime", "date_time", "Dayjs"
+          "date-time"
+        when "date"
+          "date"
+        when "uuid"
+          "uuid"
+        when "email"
+          "email"
+        end
+      end
+
+      # Normalize an explicitly declared `format:` value to its OpenAPI spelling.
+      #
+      # @param format [String, Symbol]
+      # @return [String]
+      def normalize_format(format)
+        case format.to_s
+        when "date_time", "datetime"
+          "date-time"
+        else
+          format.to_s
+        end
+      end
+    end
+  end
+end

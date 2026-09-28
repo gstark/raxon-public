@@ -1,0 +1,677 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "tempfile"
+
+RSpec.describe Raxon::OpenApi::RequestSchemaGenerator do
+  describe "#to_dry_schema" do
+    context "with no parameters" do
+      it "returns nil" do
+        parameters = Raxon::OpenApi::Parameters.new
+        generator = described_class.new(parameters)
+
+        expect(generator.to_dry_schema).to be_nil
+      end
+    end
+
+    context "with simple scalar parameters" do
+      it "generates schema for string parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "John")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "John"})
+      end
+
+      it "generates schema for number parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :id, type: :number, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(id: "42")
+        expect(result.success?).to be true
+        expect(result.to_h[:id]).to eq(42.0)
+      end
+
+      it "generates schema for boolean parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :active, type: :boolean, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(active: "true")
+        expect(result.success?).to be true
+        expect(result.to_h[:active]).to be true
+      end
+    end
+
+    context "with optional parameters" do
+      it "allows missing optional parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :age, type: :number, required: false
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "John")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "John"})
+      end
+
+      it "validates optional parameters when present" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :age, type: :number, required: false
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "John", age: "30")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "John", age: 30.0})
+      end
+
+      it "handles optional boolean parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :active, type: :boolean, required: false
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "John")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "John"})
+      end
+
+      it "validates optional boolean parameters when present" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :active, type: :boolean, required: false
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "John", active: "false")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "John", active: false})
+      end
+    end
+
+    context "with required parameters missing" do
+      it "fails validation" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call({})
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:name)
+      end
+    end
+
+    context "with nested object parameters" do
+      it "generates schema for object with properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :id, type: :number, in: :path, required: true
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+        request_body.property :auto_scale, type: :boolean, required: true
+        request_body.property :custom_max, type: :number, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call({
+          id: "42",
+          name: "My Stat",
+          auto_scale: "true",
+          custom_max: "100"
+        })
+
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({
+          id: 42.0,
+          name: "My Stat",
+          auto_scale: true,
+          custom_max: 100.0
+        })
+      end
+
+      it "validates nested object properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call({})
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:name)
+      end
+
+      it "handles optional nested properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+        request_body.property :description, type: :string, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call({name: "Test"})
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test"})
+      end
+    end
+
+    context "with deeply nested objects" do
+      it "generates schema for multi-level nesting" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :data, type: :object, required: true do |data|
+          data.property :user, type: :object, required: true do |user|
+            user.property :name, type: :string, required: true
+            user.property :address, type: :object, required: true do |address|
+              address.property :city, type: :string, required: true
+            end
+          end
+        end
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call({
+          data: {
+            user: {
+              name: "John",
+              address: {
+                city: "NYC"
+              }
+            }
+          }
+        })
+
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({
+          data: {
+            user: {
+              name: "John",
+              address: {
+                city: "NYC"
+              }
+            }
+          }
+        })
+      end
+    end
+
+    context "with array parameters" do
+      it "generates schema for array of strings" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :tags, type: :array, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(tags: ["ruby", "rails"])
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({tags: ["ruby", "rails"]})
+      end
+
+      it "validates request body array item object properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :users, type: :array, of: :object, required: true do |user|
+          user.property :id, type: :number, required: true
+        end
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(users: [{}])
+
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:users)
+      end
+    end
+
+    context "with mixed parameter locations" do
+      it "generates schema for path, query, and body parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :id, type: :number, in: :path, required: true
+        parameters.define :filter, type: :string, in: :query, required: false
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call({
+          id: "123",
+          filter: "active",
+          name: "Test"
+        })
+
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({
+          id: 123.0,
+          filter: "active",
+          name: "Test"
+        })
+      end
+    end
+
+    context "with an array of a component reference" do
+      # A component name is not a dry-schema type, so array elements fall back to
+      # loose string validation. (Unknown scalar `type:` values are now rejected
+      # at definition, so this of: path is what still exercises that fallback.)
+      it "validates unknown element types loosely" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :ids, type: :array, of: :Widget, required: true
+
+        schema = described_class.new(parameters).to_dry_schema
+
+        expect(schema.call(ids: ["a", "b"]).success?).to be true
+      end
+    end
+
+    context "with optional array parameters" do
+      it "allows missing optional array" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :tags, type: :array, required: false
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "Test")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test"})
+      end
+    end
+
+    context "with optional object parameters" do
+      it "allows missing optional objects" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :metadata, type: :object, required: false do |meta|
+          meta.property :key, type: :string, required: true
+        end
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "Test")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test"})
+      end
+
+      it "validates optional objects when present" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :metadata, type: :object, required: false do |meta|
+          meta.property :key, type: :string, required: true
+        end
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "Test", metadata: {key: "value"})
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test", metadata: {key: "value"}})
+      end
+    end
+
+    context "with request body but no parameters" do
+      it "generates schema from request body only" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "Test")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test"})
+      end
+    end
+
+    context "with empty request body" do
+      it "returns nil when both parameters and request body are empty" do
+        parameters = Raxon::OpenApi::Parameters.new
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+
+        generator = described_class.new(parameters, request_body)
+
+        expect(generator.to_dry_schema).to be_nil
+      end
+    end
+
+    context "with file parameters" do
+      it "accepts file uploads for required file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        tempfile = Tempfile.new("upload")
+        file_hash = {tempfile: tempfile, filename: "photo.jpg", type: "image/jpeg"}
+
+        result = schema.call(photo: file_hash)
+        expect(result.success?).to be true
+        expect(result.to_h[:photo]).to eq(file_hash)
+
+        tempfile.close!
+      end
+
+      it "accepts already wrapped file uploads for required file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        tempfile = Tempfile.new("upload")
+        uploaded_file = Raxon::UploadedFile.new({tempfile: tempfile, filename: "photo.jpg", type: "image/jpeg"})
+
+        result = schema.call(photo: uploaded_file)
+        expect(result.success?).to be true
+        expect(result.to_h[:photo]).to eq(uploaded_file)
+
+        tempfile.close!
+      end
+
+      it "rejects invalid file values for required file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        ["not a file", {filename: "photo.jpg"}, Object.new].each do |invalid_value|
+          result = schema.call(photo: invalid_value)
+          expect(result.success?).to be false
+          expect(result.errors.to_h).to have_key(:photo)
+        end
+      end
+
+      it "validates file fields inside array object items" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :attachments, type: :array, of: :object do |attachment|
+          attachment.property :file, type: :file, required: true
+        end
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        tempfile = Tempfile.new("upload")
+        file_hash = {tempfile: tempfile, filename: "document.pdf", type: "application/pdf"}
+
+        expect(schema.call(attachments: [{file: file_hash}]).success?).to be true
+
+        invalid_result = schema.call(attachments: [{file: "not a file"}])
+        expect(invalid_result.success?).to be false
+        expect(invalid_result.errors.to_h).to have_key(:attachments)
+
+        tempfile.close!
+      end
+
+      it "allows missing optional file fields" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :name, type: :string, required: true
+        request_body.property :photo, type: :file, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "Test")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "Test"})
+      end
+
+      it "validates required file fields are present" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call({})
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:photo)
+      end
+    end
+
+    context "with nullable properties" do
+      it "allows nil for nullable optional string properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: nil)
+        expect(result.success?).to be true
+      end
+
+      it "rejects nil for non-nullable optional string properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: nil)
+        expect(result.success?).to be false
+      end
+
+      it "rejects nil for non-nullable optional number properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :score, type: :number, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(score: nil)
+        expect(result.success?).to be false
+      end
+
+      it "rejects nil for non-nullable optional boolean properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :active, type: :boolean, required: false
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(active: nil)
+        expect(result.success?).to be false
+      end
+
+      it "allows nil for nullable required string properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: true, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable required number properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :score, type: :number, required: true, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(score: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable array properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :tags, type: :array, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(tags: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable object properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :metadata, type: :object, required: false, nullable: true do |metadata|
+          metadata.property :name, type: :string, required: true
+        end
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(metadata: nil)
+        expect(result.success?).to be true
+      end
+
+      it "allows nil for nullable file properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :photo, type: :file, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(photo: nil)
+        expect(result.success?).to be true
+      end
+
+      it "still accepts valid values for nullable properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :situation_description, type: :string, required: false, nullable: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(situation_description: "some text")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({situation_description: "some text"})
+      end
+    end
+
+    context "with empty string parameters" do
+      it "allows empty strings for required string parameters" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :tagFilter, type: :string, in: :query, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(tagFilter: "")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({tagFilter: ""})
+      end
+
+      it "allows empty strings for optional string parameters when present" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+        parameters.define :tagFilter, type: :string, in: :query, required: false
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(name: "John", tagFilter: "")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({name: "John", tagFilter: ""})
+      end
+
+      it "still requires required parameters to be present" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :name, type: :string, required: true
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call({})
+        expect(result.success?).to be false
+        expect(result.errors.to_h).to have_key(:name)
+      end
+
+      it "allows empty strings in request body properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+
+        request_body = Raxon::OpenApi::RequestBody.new(type: :object, required: true)
+        request_body.property :description, type: :string, required: true
+
+        generator = described_class.new(parameters, request_body)
+        schema = generator.to_dry_schema
+
+        result = schema.call(description: "")
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({description: ""})
+      end
+
+      it "allows empty strings in nested object properties" do
+        parameters = Raxon::OpenApi::Parameters.new
+        parameters.define :data, type: :object, required: true do |data|
+          data.property :name, type: :string, required: true
+        end
+
+        generator = described_class.new(parameters)
+        schema = generator.to_dry_schema
+
+        result = schema.call(data: {name: ""})
+        expect(result.success?).to be true
+        expect(result.to_h).to eq({data: {name: ""}})
+      end
+    end
+  end
+end

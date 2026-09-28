@@ -1,0 +1,808 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+
+RSpec.describe Raxon::Routes do
+  let(:routes) { described_class.new }
+  let(:endpoint) { Raxon::OpenApi::Endpoint.new }
+
+  describe "#initialize" do
+    it "initializes with an empty routes hash" do
+      expect(routes.empty?).to be(true)
+      expect(routes.size).to eq(0)
+    end
+  end
+
+  describe "#lookup" do
+    # Above LINEAR_SCAN_LIMIT dynamic routes, so the index is walked.
+    before do
+      12.times do |index|
+        routes.register("GET", "/r#{index}/{id}", Raxon::OpenApi::Endpoint.new)
+        routes.register("POST", "/r#{index}/{id}", Raxon::OpenApi::Endpoint.new)
+      end
+      routes.prepare!
+      allow(routes).to receive(:dynamic_candidates).and_call_original
+    end
+
+    it "walks the index once for a HEAD request served by a GET route" do
+      result = routes.lookup("HEAD", "/r3/7")
+
+      expect(result[:head_from_get]).to be(true)
+      expect(result[:params]).to eq(id: "7")
+      expect(routes).to have_received(:dynamic_candidates).once
+    end
+
+    it "walks the index once for a miss, including its allowed methods" do
+      result = routes.lookup("DELETE", "/r3/7")
+
+      expect(result).to be_a(described_class::Miss)
+      expect(result.allowed_methods).to eq(%w[GET HEAD POST OPTIONS])
+      expect(routes).to have_received(:dynamic_candidates).once
+    end
+
+    it "answers a path that matches nothing with no allowed methods" do
+      expect(routes.lookup("GET", "/nothing/here").allowed_methods).to eq([])
+    end
+
+    it "returns nil from #find for a miss" do
+      expect(routes.find("DELETE", "/r3/7")).to be_nil
+    end
+  end
+
+  describe "automatic HEAD" do
+    it "shares the GET route's effective endpoint" do
+      routes.register("GET", "/users/{id}", endpoint)
+
+      get = routes.find("GET", "/users/1")
+      head = routes.find("HEAD", "/users/1")
+
+      expect(head[:effective_endpoint]).to be(get[:effective_endpoint])
+      expect(endpoint.effective_endpoint).to be(get[:effective_endpoint])
+      expect(head[:head_from_get]).to be(true)
+      expect(get).not_to have_key(:head_from_get)
+    end
+  end
+
+  describe "#register" do
+    it "registers a route with method and path" do
+      routes.register("GET", "/users", endpoint)
+
+      expect(routes.size).to eq(1)
+      expect(routes.empty?).to be(false)
+    end
+
+    it "normalizes method to uppercase" do
+      routes.register("get", "/users", endpoint)
+
+      result = routes.find("GET", "/users")
+      expect(result).not_to be_nil
+      expect(result[:endpoint]).to eq(endpoint)
+    end
+
+    it "stores mustermann pattern for the route" do
+      routes.register("GET", "/users/{id}", endpoint)
+
+      result = routes.find("GET", "/users/123")
+      expect(result).not_to be_nil
+      expect(result[:params]).to eq({id: "123"})
+    end
+
+    it "allows multiple routes with different methods" do
+      endpoint1 = Raxon::OpenApi::Endpoint.new
+      endpoint2 = Raxon::OpenApi::Endpoint.new
+
+      routes.register("GET", "/users", endpoint1)
+      routes.register("POST", "/users", endpoint2)
+
+      expect(routes.size).to eq(2)
+      expect(routes.find("GET", "/users")[:endpoint]).to eq(endpoint1)
+      expect(routes.find("POST", "/users")[:endpoint]).to eq(endpoint2)
+    end
+
+    it "allows multiple routes with different paths" do
+      endpoint1 = Raxon::OpenApi::Endpoint.new
+      endpoint2 = Raxon::OpenApi::Endpoint.new
+
+      routes.register("GET", "/users", endpoint1)
+      routes.register("GET", "/posts", endpoint2)
+
+      expect(routes.size).to eq(2)
+      expect(routes.find("GET", "/users")[:endpoint]).to eq(endpoint1)
+      expect(routes.find("GET", "/posts")[:endpoint]).to eq(endpoint2)
+    end
+  end
+
+  describe "#find" do
+    context "with exact match" do
+      it "finds route by exact method and path" do
+        routes.register("GET", "/users", endpoint)
+
+        result = routes.find("GET", "/users")
+
+        expect(result).not_to be_nil
+        expect(result[:endpoint]).to eq(endpoint)
+        expect(result[:endpoints]).to include(endpoint)
+      end
+
+      it "returns nil for non-existent route" do
+        routes.register("GET", "/users", endpoint)
+
+        result = routes.find("GET", "/posts")
+
+        expect(result).to be_nil
+      end
+
+      it "returns nil for wrong method" do
+        routes.register("GET", "/users", endpoint)
+
+        result = routes.find("POST", "/users")
+
+        expect(result).to be_nil
+      end
+
+      it "is case-insensitive for HTTP method" do
+        routes.register("GET", "/users", endpoint)
+
+        result = routes.find("get", "/users")
+
+        expect(result).not_to be_nil
+        expect(result[:endpoint]).to eq(endpoint)
+      end
+    end
+
+    context "with pattern matching" do
+      it "matches routes with path parameters" do
+        routes.register("GET", "/users/{id}", endpoint)
+
+        result = routes.find("GET", "/users/123")
+
+        expect(result).not_to be_nil
+        expect(result[:endpoint]).to eq(endpoint)
+        expect(result[:params]).to eq({id: "123"})
+      end
+
+      it "extracts multiple path parameters" do
+        routes.register("GET", "/users/{user_id}/posts/{post_id}", endpoint)
+
+        result = routes.find("GET", "/users/42/posts/99")
+
+        expect(result).not_to be_nil
+        expect(result[:params]).to eq({user_id: "42", post_id: "99"})
+      end
+
+      it "returns nil for non-matching pattern" do
+        routes.register("GET", "/users/{id}", endpoint)
+
+        result = routes.find("GET", "/posts/123")
+
+        expect(result).to be_nil
+      end
+
+      it "prefers exact match over pattern match" do
+        exact_endpoint = Raxon::OpenApi::Endpoint.new
+        pattern_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("GET", "/users/all", exact_endpoint)
+        routes.register("GET", "/users/{id}", pattern_endpoint)
+
+        result = routes.find("GET", "/users/all")
+
+        expect(result[:endpoint]).to eq(exact_endpoint)
+      end
+    end
+
+    context "with route hierarchy" do
+      it "includes parent routes in hierarchy" do
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("GET", "/api", parent_endpoint)
+        routes.register("GET", "/api/users", child_endpoint)
+
+        result = routes.find("GET", "/api/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([parent_endpoint, child_endpoint])
+      end
+
+      it "includes root all route before canonical parent and child routes" do
+        root_endpoint = Raxon::OpenApi::Endpoint.new
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/", root_endpoint)
+        routes.register("ALL", "/orgs/{org_id}", parent_endpoint)
+        routes.register("GET", "/orgs/{org_id}/users", child_endpoint)
+
+        result = routes.find("GET", "/orgs/123/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([root_endpoint, parent_endpoint, child_endpoint])
+      end
+
+      it "builds hierarchy with multiple levels" do
+        level1 = Raxon::OpenApi::Endpoint.new
+        level2 = Raxon::OpenApi::Endpoint.new
+        level3 = Raxon::OpenApi::Endpoint.new
+
+        routes.register("GET", "/api", level1)
+        routes.register("GET", "/api/v1", level2)
+        routes.register("GET", "/api/v1/users", level3)
+
+        result = routes.find("GET", "/api/v1/users")
+
+        expect(result[:endpoint]).to eq(level3)
+        expect(result[:endpoints]).to eq([level1, level2, level3])
+      end
+
+      it "only includes matching parent paths" do
+        users_endpoint = Raxon::OpenApi::Endpoint.new
+        posts_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("GET", "/api/users", users_endpoint)
+        routes.register("GET", "/api/posts", posts_endpoint)
+
+        result = routes.find("GET", "/api/users")
+
+        expect(result[:endpoints]).to eq([users_endpoint])
+        expect(result[:endpoints]).not_to include(posts_endpoint)
+      end
+
+      it "returns single endpoint when no parents exist" do
+        routes.register("GET", "/users", endpoint)
+
+        result = routes.find("GET", "/users")
+
+        expect(result[:endpoints]).to eq([endpoint])
+      end
+
+      it "preserves params when building hierarchy" do
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("GET", "/users", parent_endpoint)
+        routes.register("GET", "/users/{id}", child_endpoint)
+
+        result = routes.find("GET", "/users/123")
+
+        expect(result[:params]).to eq({id: "123"})
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to include(parent_endpoint)
+        expect(result[:endpoints].size).to be >= 1
+      end
+
+      it "keeps all routes separate from method-specific routes at the same path" do
+        all_endpoint = Raxon::OpenApi::Endpoint.new
+        get_endpoint = Raxon::OpenApi::Endpoint.new
+        post_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/api/users", all_endpoint)
+        routes.register("GET", "/api/users", get_endpoint)
+        routes.register("POST", "/api/users", post_endpoint)
+
+        get_result = routes.find("GET", "/api/users")
+        post_result = routes.find("POST", "/api/users")
+
+        expect(get_result[:endpoint]).to eq(get_endpoint)
+        expect(get_result[:endpoints]).to eq([all_endpoint, get_endpoint])
+        expect(post_result[:endpoint]).to eq(post_endpoint)
+        expect(post_result[:endpoints]).to eq([all_endpoint, post_endpoint])
+      end
+
+      it "includes parameterized parent routes in the hierarchy" do
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/orgs/{org_id}", parent_endpoint)
+        routes.register("GET", "/orgs/{org_id}/users", child_endpoint)
+
+        result = routes.find("GET", "/orgs/123/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([parent_endpoint, child_endpoint])
+        expect(result[:params]).to eq(org_id: "123")
+      end
+
+      it "uses the exact winning child route pattern to include its parameterized canonical parent" do
+        parent_endpoint = Raxon::OpenApi::Endpoint.new
+        child_all_endpoint = Raxon::OpenApi::Endpoint.new
+        child_endpoint = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/orgs/{org_id}", parent_endpoint)
+        routes.register("ALL", "/orgs/{org_id}/users", child_all_endpoint)
+        routes.register("GET", "/orgs/{org_id}/users", child_endpoint)
+
+        result = routes.find("GET", "/orgs/123/users")
+
+        expect(result[:endpoint]).to eq(child_endpoint)
+        expect(result[:endpoints]).to eq([parent_endpoint, child_all_endpoint, child_endpoint])
+        expect(result[:params]).to eq(org_id: "123")
+      end
+
+      it "orders all and method-specific endpoints from parent to child" do
+        root_all = Raxon::OpenApi::Endpoint.new
+        parent_all = Raxon::OpenApi::Endpoint.new
+        parent_get = Raxon::OpenApi::Endpoint.new
+        child_all = Raxon::OpenApi::Endpoint.new
+        child_get = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/", root_all)
+        routes.register("ALL", "/api", parent_all)
+        routes.register("GET", "/api", parent_get)
+        routes.register("ALL", "/api/users", child_all)
+        routes.register("GET", "/api/users", child_get)
+
+        result = routes.find("GET", "/api/users")
+
+        expect(result[:endpoint]).to eq(child_get)
+        expect(result[:endpoints]).to eq([root_all, parent_all, parent_get, child_all, child_get])
+      end
+
+      it "does not include unrelated parameterized parent routes that merely match the concrete prefix" do
+        unrelated_parent = Raxon::OpenApi::Endpoint.new
+        canonical_parent = Raxon::OpenApi::Endpoint.new
+        child = Raxon::OpenApi::Endpoint.new
+
+        routes.register("ALL", "/{tenant_id}/users", unrelated_parent)
+        routes.register("ALL", "/orgs/{org_id}", canonical_parent)
+        routes.register("GET", "/orgs/{org_id}/users", child)
+
+        result = routes.find("GET", "/orgs/users/users")
+        endpoint_names = {
+          unrelated_parent => "unrelated_parent",
+          canonical_parent => "canonical_parent",
+          child => "child"
+        }
+
+        expect(result[:endpoint]).to eq(child)
+        expect(result[:endpoints].map { |endpoint| endpoint_names.fetch(endpoint) }).to eq(["canonical_parent", "child"])
+      end
+    end
+  end
+
+  describe "#all" do
+    it "returns all registered routes" do
+      endpoint1 = Raxon::OpenApi::Endpoint.new
+      endpoint2 = Raxon::OpenApi::Endpoint.new
+
+      routes.register("GET", "/users", endpoint1)
+      routes.register("POST", "/users", endpoint2)
+
+      all_routes = routes.all
+
+      expect(all_routes).to be_a(Hash)
+      expect(all_routes.size).to eq(2)
+    end
+
+    it "returns empty hash when no routes registered" do
+      expect(routes.all).to eq({})
+    end
+  end
+
+  describe "#reset" do
+    it "clears all registered routes" do
+      routes.register("GET", "/users", endpoint)
+      routes.register("POST", "/posts", endpoint)
+
+      expect(routes.size).to eq(2)
+
+      routes.reset
+
+      expect(routes.size).to eq(0)
+      expect(routes.empty?).to be(true)
+    end
+
+    it "allows registering new routes after reset" do
+      routes.register("GET", "/users", endpoint)
+      routes.reset
+
+      new_endpoint = Raxon::OpenApi::Endpoint.new
+      routes.register("POST", "/posts", new_endpoint)
+
+      expect(routes.size).to eq(1)
+      expect(routes.find("POST", "/posts")[:endpoint]).to eq(new_endpoint)
+    end
+  end
+
+  describe "#size" do
+    it "returns 0 for empty routes" do
+      expect(routes.size).to eq(0)
+    end
+
+    it "returns count of registered routes" do
+      routes.register("GET", "/users", endpoint)
+      routes.register("POST", "/users", endpoint)
+      routes.register("GET", "/posts", endpoint)
+
+      expect(routes.size).to eq(3)
+    end
+  end
+
+  describe "#empty?" do
+    it "returns true when no routes registered" do
+      expect(routes.empty?).to be(true)
+    end
+
+    it "returns false when routes exist" do
+      routes.register("GET", "/users", endpoint)
+
+      expect(routes.empty?).to be(false)
+    end
+
+    it "returns true after reset" do
+      routes.register("GET", "/users", endpoint)
+      routes.reset
+
+      expect(routes.empty?).to be(true)
+    end
+  end
+
+  describe "#each" do
+    it "iterates over all routes" do
+      endpoint1 = Raxon::OpenApi::Endpoint.new
+      endpoint2 = Raxon::OpenApi::Endpoint.new
+
+      routes.register("GET", "/users", endpoint1)
+      routes.register("POST", "/users", endpoint2)
+
+      count = 0
+      routes.each do |key, data|
+        count += 1
+        expect(key).to be_a(Hash)
+        expect(data).to be_a(Hash)
+        expect(data).to have_key(:endpoint)
+        expect(data).to have_key(:mustermann)
+      end
+
+      expect(count).to eq(2)
+    end
+
+    it "returns Enumerator when no block given" do
+      routes.register("GET", "/users", endpoint)
+
+      enumerator = routes.each
+
+      expect(enumerator).to be_a(Enumerator)
+      expect(enumerator.count).to eq(1)
+    end
+  end
+
+  describe "Enumerable methods" do
+    before do
+      3.times do |i|
+        routes.register("GET", "/route#{i}", Raxon::OpenApi::Endpoint.new)
+      end
+    end
+
+    it "supports map" do
+      keys = routes.map { |key, _| key }
+
+      expect(keys).to be_a(Array)
+      expect(keys.size).to eq(3)
+    end
+
+    it "supports select" do
+      get_routes = routes.select { |key, _| key[:method] == "GET" }
+
+      expect(get_routes.size).to eq(3)
+    end
+
+    it "supports any?" do
+      has_routes = routes.any?
+
+      expect(has_routes).to be(true)
+    end
+  end
+
+  describe "complex routing scenarios" do
+    it "handles mixed exact and pattern routes" do
+      exact = Raxon::OpenApi::Endpoint.new
+      pattern1 = Raxon::OpenApi::Endpoint.new
+      pattern2 = Raxon::OpenApi::Endpoint.new
+
+      routes.register("GET", "/users/me", exact)
+      routes.register("GET", "/users/{id}", pattern1)
+      routes.register("GET", "/users/{id}/posts/{post_id}", pattern2)
+
+      # Exact match
+      result1 = routes.find("GET", "/users/me")
+      expect(result1[:endpoint]).to eq(exact)
+      expect(result1[:params]).to be_nil
+
+      # Pattern match
+      result2 = routes.find("GET", "/users/123")
+      expect(result2[:endpoint]).to eq(pattern1)
+      expect(result2[:params]).to eq({id: "123"})
+
+      # Nested pattern match
+      result3 = routes.find("GET", "/users/123/posts/456")
+      expect(result3[:endpoint]).to eq(pattern2)
+      expect(result3[:params]).to eq({id: "123", post_id: "456"})
+    end
+
+    it "handles root path" do
+      routes.register("GET", "/", endpoint)
+
+      result = routes.find("GET", "/")
+
+      expect(result).not_to be_nil
+      expect(result[:endpoint]).to eq(endpoint)
+    end
+
+    it "handles deeply nested paths" do
+      routes.register("GET", "/api/v1/users/{user_id}/posts/{post_id}/comments/{comment_id}", endpoint)
+
+      result = routes.find("GET", "/api/v1/users/1/posts/2/comments/3")
+
+      expect(result).not_to be_nil
+      expect(result[:params]).to eq({user_id: "1", post_id: "2", comment_id: "3"})
+    end
+
+    it "handles routes with similar prefixes" do
+      user_endpoint = Raxon::OpenApi::Endpoint.new
+      users_endpoint = Raxon::OpenApi::Endpoint.new
+
+      routes.register("GET", "/user", user_endpoint)
+      routes.register("GET", "/users", users_endpoint)
+
+      result1 = routes.find("GET", "/user")
+      result2 = routes.find("GET", "/users")
+
+      expect(result1[:endpoint]).to eq(user_endpoint)
+      expect(result2[:endpoint]).to eq(users_endpoint)
+    end
+  end
+end
+
+RSpec.describe Raxon::Routes, "ALL routes" do
+  let(:routes) { described_class.new }
+  let(:all_endpoint) { Raxon::OpenApi::Endpoint.new }
+
+  it "matches every HTTP method for an ALL registration" do
+    routes.register("ALL", "/admin", all_endpoint)
+
+    %w[GET POST PUT PATCH DELETE].each do |method|
+      result = routes.find(method, "/admin")
+      expect(result).not_to be_nil
+      expect(result[:endpoint]).to eq(all_endpoint)
+    end
+  end
+
+  it "lists ALL registrations under the ALL method key" do
+    routes.register("ALL", "/admin", all_endpoint)
+
+    expect(routes.all.keys).to include(method: "ALL", path: "/admin")
+  end
+
+  it "raises a collision when two ALL endpoints claim the same path" do
+    conflicting = Raxon::OpenApi::Endpoint.new
+    all_endpoint.route_file_path = "routes/admin/all.rb"
+    conflicting.route_file_path = "routes/admin/all_copy.rb"
+
+    routes.register("ALL", "/admin", all_endpoint)
+
+    expect { routes.register("ALL", "/admin", conflicting) }
+      .to raise_error(Raxon::Error, %r{ALL /admin.*all_copy\.rb.*all\.rb}m)
+  end
+
+  it "matches dynamic ALL routes and extracts path params" do
+    routes.register("ALL", "/users/{id}", all_endpoint)
+
+    result = routes.find("DELETE", "/users/42")
+
+    expect(result).not_to be_nil
+    expect(result[:endpoint]).to eq(all_endpoint)
+    expect(result[:params]).to eq(id: "42")
+  end
+
+  it "prefers a method-specific dynamic route over a dynamic ALL route" do
+    get_endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/users/{id}", all_endpoint)
+    routes.register("GET", "/users/{id}", get_endpoint)
+
+    expect(routes.find("GET", "/users/42")[:endpoint]).to eq(get_endpoint)
+    expect(routes.find("POST", "/users/42")[:endpoint]).to eq(all_endpoint)
+  end
+end
+
+RSpec.describe Raxon::Routes, "dynamic route scanning" do
+  let(:routes) { described_class.new }
+
+  it "keeps scanning dynamic ALL entries until one matches" do
+    orgs_endpoint = Raxon::OpenApi::Endpoint.new
+    users_endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/orgs/{org_id}", orgs_endpoint)
+    routes.register("ALL", "/users/{id}", users_endpoint)
+
+    expect(routes.find("GET", "/users/7")[:endpoint]).to eq(users_endpoint)
+    expect(routes.find("GET", "/orgs/7")[:endpoint]).to eq(orgs_endpoint)
+    expect(routes.find("GET", "/teams/7")).to be_nil
+  end
+end
+
+RSpec.describe Raxon::Routes, "unusual registrations" do
+  let(:routes) { described_class.new }
+
+  it "routes paths registered without a leading slash" do
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "users", endpoint)
+
+    result = routes.find("GET", "users")
+
+    expect(result[:endpoint]).to eq(endpoint)
+    expect(result[:endpoints]).to eq([endpoint])
+  end
+
+  it "does not duplicate an endpoint registered at multiple hierarchy levels" do
+    shared = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/api", shared)
+    routes.register("GET", "/api/users", shared)
+
+    result = routes.find("GET", "/api/users")
+
+    expect(result[:endpoints]).to eq([shared])
+  end
+
+  it "omits optional path segments that did not match" do
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/files/{name}?", endpoint)
+
+    expect(routes.find("GET", "/files/report")[:params]).to eq(name: "report")
+    expect(routes.find("GET", "/files/")[:params]).to eq({})
+  end
+end
+
+# Above LINEAR_SCAN_LIMIT dynamic routes, lookup stops asking every pattern and
+# consults a segment index first. The index only narrows the candidates —
+# Mustermann still matches and still extracts params — so these assert that the
+# answers are the ones the linear scan gave, on a route table large enough to
+# take the indexed path.
+RSpec.describe Raxon::Routes, "with more dynamic routes than the linear scan limit" do
+  subject(:routes) { described_class.new }
+
+  # Ten resources of three dynamic routes each: comfortably over the limit.
+  def register_resources(count = 10)
+    endpoints = {}
+    count.times do |i|
+      name = "resource#{i}"
+      ["/api/#{name}/{id}", "/api/#{name}/{id}/archive", "/api/#{name}/{id}/copy"].each do |template|
+        endpoints[template] = Raxon::OpenApi::Endpoint.new
+        routes.register("GET", template, endpoints[template])
+      end
+    end
+    endpoints
+  end
+
+  it "matches a dynamic route and extracts its params" do
+    register_resources
+
+    data = routes.find("GET", "/api/resource7/42")
+
+    expect(data).not_to be_nil
+    expect(data[:params]).to eq(id: "42")
+  end
+
+  it "matches a deeper dynamic route" do
+    register_resources
+
+    expect(routes.find("GET", "/api/resource3/9/archive")[:params]).to eq(id: "9")
+  end
+
+  it "returns nil for a path no pattern admits" do
+    register_resources
+
+    expect(routes.find("GET", "/api/resource3/9/nope")).to be_nil
+    expect(routes.find("GET", "/api/nosuch/9")).to be_nil
+  end
+
+  it "still answers static paths" do
+    register_resources
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/api/health", endpoint)
+
+    expect(routes.find("GET", "/api/health")[:endpoint]).to equal(endpoint)
+  end
+
+  # Two patterns can admit one path. Which answers is registration order, and
+  # the index has to preserve it rather than preferring the more specific.
+  it "keeps registration order when two patterns both match" do
+    register_resources
+    general = Raxon::OpenApi::Endpoint.new
+    specific = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/api/{resource}/{id}/settings", general)
+    routes.register("GET", "/api/resource1/{id}/settings", specific)
+
+    expect(routes.find("GET", "/api/resource1/5/settings")[:endpoint]).to equal(general)
+  end
+
+  # A segment that merely contains a parameter cannot be indexed by equality,
+  # so it stays a candidate for every path and Mustermann rules on it.
+  it "matches a pattern whose segment is only partly a parameter" do
+    register_resources
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/files/{name}.json", endpoint)
+
+    expect(routes.find("GET", "/files/report.json")[:params]).to eq(name: "report")
+    expect(routes.find("GET", "/files/report.txt")).to be_nil
+  end
+
+  it "reports allowed methods for a dynamic path" do
+    register_resources
+    routes.register("DELETE", "/api/resource2/{id}", Raxon::OpenApi::Endpoint.new)
+
+    expect(routes.allowed_methods("/api/resource2/3")).to eq(%w[GET HEAD DELETE OPTIONS])
+  end
+
+  it "serves HEAD from a GET route" do
+    register_resources
+
+    data = routes.find("HEAD", "/api/resource4/8")
+
+    expect(data[:head_from_get]).to be(true)
+    expect(data[:params]).to eq(id: "8")
+  end
+
+  it "matches an all-methods route" do
+    register_resources
+    endpoint = Raxon::OpenApi::Endpoint.new
+    routes.register("ALL", "/api/catchall/{id}", endpoint)
+
+    expect(routes.find("PATCH", "/api/catchall/1")[:endpoint]).to equal(endpoint)
+  end
+
+  # The path walks to a node that exists only as a prefix of a longer template,
+  # so there is nothing registered at that depth to answer with.
+  it "returns nil for a path that is only a prefix of a registered pattern" do
+    register_resources
+    routes.register("GET", "/api/deep/{a}/{b}/{c}", Raxon::OpenApi::Endpoint.new)
+
+    expect(routes.find("GET", "/api/deep/1")).to be_nil
+    expect(routes.find("GET", "/api/deep/1/2/3")).not_to be_nil
+  end
+
+  # Two templates with the same shape land on the same node, and the one
+  # registered first still answers.
+  it "keeps registration order between two patterns of identical shape" do
+    register_resources
+    first = Raxon::OpenApi::Endpoint.new
+    second = Raxon::OpenApi::Endpoint.new
+    routes.register("GET", "/api/shape/{id}", first)
+    routes.register("POST", "/api/shape/{slug}", second)
+
+    expect(routes.find("GET", "/api/shape/7")[:endpoint]).to equal(first)
+    expect(routes.find("POST", "/api/shape/7")[:endpoint]).to equal(second)
+  end
+
+  it "forgets the index on reset" do
+    register_resources
+    routes.reset
+
+    expect(routes.find("GET", "/api/resource7/42")).to be_nil
+  end
+end
+
+RSpec.describe "Percent-encoded path parameters through the router" do
+  def id_for(path)
+    seen = nil
+    define_route("routes/users/__id__/get.rb") do |endpoint|
+      endpoint.handler do |request, response, _metadata|
+        seen = request.params[:id]
+        response.ok
+      end
+    end
+    status, = Raxon::Router.new.call(Rack::MockRequest.env_for(path))
+    [status, seen]
+  end
+
+  it "hands the handler the decoded value" do
+    expect(id_for("/users/a%20b")).to eq([200, "a b"])
+  end
+
+  it "decodes an encoded slash within one segment" do
+    expect(id_for("/users/a%2Fb")).to eq([200, "a/b"])
+  end
+
+  it "answers 400 for a value that is not UTF-8" do
+    expect(id_for("/users/%FF")).to eq([400, nil])
+  end
+end

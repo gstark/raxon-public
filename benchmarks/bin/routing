@@ -1,0 +1,106 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Route lookup as an application grows.
+#
+# The other benchmarks measure one request against a handful of routes, which
+# says nothing about the cost that scales with the size of the application
+# rather than the size of the request. Dynamic routes used to be matched by
+# asking every pattern in turn, so a real API paid for every route it had ever
+# declared on every request: at 400 routes, ~76us to resolve
+# `PUT /api/v1/x/{id}/archive` — more than the rest of that request together.
+#
+# The shape modelled here is one REST resource as they usually come: a list, a
+# create, a show, an update, a delete, two state changes, and a copy. Eight
+# routes, six of them dynamic.
+#
+# Usage:
+#   ruby benchmarks/bin/routing
+#   ruby benchmarks/bin/routing --resources 1,10,100 --iterations 100000
+
+require "optparse"
+
+ROOT = File.expand_path("..", __dir__)
+
+ENV["RAXON_ENV"] = "production"
+ENV["RACK_ENV"] = "production"
+ENV["BUNDLE_GEMFILE"] ||= File.join(ROOT, "Gemfile")
+require "bundler/setup"
+require "raxon"
+
+options = {resources: [1, 5, 20, 50, 100], iterations: 50_000, reps: 5}
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: ruby benchmarks/bin/routing [options]"
+
+  opts.on("--resources LIST", "Comma-separated resource counts (default: #{options[:resources].join(",")})") do |value|
+    options[:resources] = value.split(",").map { |count| Integer(count) }
+  end
+
+  opts.on("-n", "--iterations N", Integer, "lookups per repetition (default: #{options[:iterations]})") do |value|
+    options[:iterations] = value
+  end
+
+  opts.on("--reps N", Integer, "repetitions; the median is reported (default: #{options[:reps]})") do |value|
+    options[:reps] = value
+  end
+
+  opts.on("-h", "--help", "Print this help") do
+    puts opts
+    exit
+  end
+end.parse!
+
+CLOCK = Process::CLOCK_PROCESS_CPUTIME_ID
+
+def measure(iterations, reps)
+  Array.new(reps) do
+    GC.start
+    started = Process.clock_gettime(CLOCK)
+    index = 0
+    while index < iterations
+      yield
+      index += 1
+    end
+    ((Process.clock_gettime(CLOCK) - started) / iterations) * 1_000_000
+  end.sort[reps / 2]
+end
+
+# One REST resource, in the shape they usually come.
+def build_routes(resources)
+  routes = Raxon::Routes.new
+
+  resources.times do |i|
+    name = "resource#{i}"
+    endpoint = Raxon::OpenApi::Endpoint.new
+
+    routes.register("GET", "/api/v1/#{name}", endpoint)
+    routes.register("POST", "/api/v1/#{name}", endpoint)
+    routes.register("GET", "/api/v1/#{name}/{id}", endpoint)
+    routes.register("PUT", "/api/v1/#{name}/{id}", endpoint)
+    routes.register("DELETE", "/api/v1/#{name}/{id}", endpoint)
+    routes.register("PUT", "/api/v1/#{name}/{id}/archive", endpoint)
+    routes.register("PUT", "/api/v1/#{name}/{id}/unarchive", endpoint)
+    routes.register("POST", "/api/v1/#{name}/{id}/copy", endpoint)
+  end
+
+  routes
+end
+
+puts "#{options[:iterations]} lookups x #{options[:reps]} reps, CPU time, median"
+puts "measuring the last-registered resource, so a linear scan runs its longest\n\n"
+puts "resources      routes        static       dynamic  deep dynamic"
+
+options[:resources].each do |resources|
+  routes = build_routes(resources)
+  last = "resource#{resources - 1}"
+
+  static = measure(options[:iterations], options[:reps]) { routes.find("GET", "/api/v1/#{last}") }
+  dynamic = measure(options[:iterations], options[:reps]) { routes.find("GET", "/api/v1/#{last}/123") }
+  deep = measure(options[:iterations], options[:reps]) { routes.find("PUT", "/api/v1/#{last}/123/archive") }
+
+  puts format("%-11d %8d %11.2fus %11.2fus %11.2fus", resources, resources * 8, static, dynamic, deep)
+end
+
+puts "\nBelow Raxon::Routes::LINEAR_SCAN_LIMIT dynamic routes the index is skipped,"
+puts "so the smallest row measures the scan and the rest measure the index."

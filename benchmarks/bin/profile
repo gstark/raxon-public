@@ -1,0 +1,289 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "json"
+require "optparse"
+
+ROOT = File.expand_path("..", __dir__)
+APP_DIR = File.join(ROOT, "apps", "raxon")
+DEFAULT_ENDPOINTS = {
+  "plaintext" => "/plaintext",
+  "json" => "/json",
+  "path_param" => "/users/123",
+  # Exercises the dry-schema validation path: /users/123 declares a single plain
+  # string parameter and so takes the PlainStringSchema fast path, which would
+  # otherwise leave request validation unmeasured.
+  "validated_params" => "/search?limit=10&status=active&cursor=abc123"
+}.freeze
+
+# Benchmark the framework as it is deployed, not as it is developed. In
+# development Raxon defaults to hot reloading, which stats every route file on
+# every request: a Dir.glob and a File.mtime per request put Dir.glob at 70% of
+# the profile and made a plaintext response 50x slower. Set unconditionally, and
+# before Raxon is loaded, because RAXON_ENV wins over RACK_ENV and either one
+# inherited from the caller's shell would otherwise decide what gets measured.
+ENV["RAXON_ENV"] = "production"
+ENV["RACK_ENV"] = "production"
+
+ENV["BUNDLE_GEMFILE"] ||= File.join(ROOT, "Gemfile")
+require "bundler/setup"
+require "rack/mock_request"
+require "vernier"
+require "raxon"
+
+options = {
+  endpoints: DEFAULT_ENDPOINTS.keys,
+  iterations: 20_000,
+  warmup: 2_000,
+  mode: :wall,
+  interval: 100,
+  allocation_interval: 0,
+  output_dir: File.join(ROOT, "tmp", "profiles"),
+  top: 15,
+  folded: true
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = "Usage: ruby benchmarks/bin/profile [options]"
+
+  opts.on("--endpoints LIST", "Comma-separated endpoints: #{DEFAULT_ENDPOINTS.keys.join(",")}") do |value|
+    options[:endpoints] = value.split(",").map(&:strip)
+  end
+
+  opts.on("-n", "--iterations N", Integer, "profiled requests per endpoint (default: #{options[:iterations]})") do |value|
+    options[:iterations] = value
+  end
+
+  opts.on("--warmup N", Integer, "warmup requests per endpoint (default: #{options[:warmup]})") do |value|
+    options[:warmup] = value
+  end
+
+  opts.on("--mode MODE", %w[wall cpu retained], "Vernier mode: wall, cpu, retained (default: wall)") do |value|
+    options[:mode] = value.to_sym
+  end
+
+  opts.on("--interval MICROSECONDS", Integer, "sampling interval in us (default: #{options[:interval]})") do |value|
+    options[:interval] = value
+  end
+
+  opts.on("--allocations N", Integer, "also sample every Nth allocation (default: off)") do |value|
+    options[:allocation_interval] = value
+  end
+
+  opts.on("-o", "--output-dir PATH", "Profile output directory (default: #{options[:output_dir]})") do |value|
+    options[:output_dir] = value
+  end
+
+  opts.on("--top N", Integer, "hottest frames to print per endpoint, 0 to skip (default: #{options[:top]})") do |value|
+    options[:top] = value
+  end
+
+  opts.on("--[no-]folded", "also write folded stacks for flame graph tools (default: on)") do |value|
+    options[:folded] = value
+  end
+
+  opts.on("-h", "--help", "Print this help") do
+    puts opts
+    exit
+  end
+end
+
+parser.parse!
+
+missing_endpoints = options[:endpoints] - DEFAULT_ENDPOINTS.keys
+unless missing_endpoints.empty?
+  warn "Unknown endpoint(s): #{missing_endpoints.join(", ")}"
+  exit 1
+end
+
+if options[:iterations] <= 0
+  warn "--iterations must be positive"
+  exit 1
+end
+
+if options[:warmup].negative?
+  warn "--warmup must be zero or positive"
+  exit 1
+end
+
+Raxon.configure do |config|
+  config.routes_directory = File.join(APP_DIR, "routes")
+end
+
+# The env vars above should have settled this, but a benchmark that quietly
+# measures the wrong thing is worse than one that refuses to run.
+if Raxon.configuration.reload_routes?
+  abort "route reloading is on; this would profile development-mode filesystem polling, not request handling"
+end
+
+Raxon::RouteLoader.reset!
+Raxon::RouteLoader.load!
+app = Raxon::Server.new
+
+FileUtils.mkdir_p(options[:output_dir])
+
+# Build Rack envs outside the profiled window so the flamegraph shows time spent
+# in Raxon handling an already-created Rack request, not harness env building.
+def prebuild_envs(path, count)
+  Array.new(count) { Rack::MockRequest.env_for(path, method: "GET") }
+end
+
+def call_app(app, env)
+  _status, _headers, body = app.call(env)
+  body.each { |_chunk| } if body.respond_to?(:each)
+  body.close if body.respond_to?(:close)
+end
+
+def drive(app, envs)
+  index = 0
+  count = envs.length
+  while index < count
+    call_app(app, envs[index])
+    index += 1
+  end
+end
+
+# Collapse the profile into folded stacks: one line per unique root-to-leaf
+# path, `frame;frame;frame <samples>`.
+#
+# Vernier writes the Firefox profiler format, which vernier.prof and the Firefox
+# Profiler render as a flame graph. Folded stacks are the other lingua franca —
+# speedscope, flamegraph.pl, and inferno all read them — and unlike the JSON they
+# are legible on their own and diffable between runs, which is what makes a
+# flame graph useful for comparing a change rather than just looking at one.
+#
+# The busiest thread is the one driving requests; the others are Vernier's own.
+#
+# @param profile_path [String] A profile written by Vernier
+# @return [String] Folded stacks, hottest last
+def folded_stacks(profile_path)
+  data = JSON.parse(File.read(profile_path))
+  thread = data["threads"].max_by { |candidate| candidate["samples"]["stack"].compact.length }
+  return "" if thread.nil?
+
+  strings = thread["stringArray"]
+  funcs = thread["funcTable"]
+  frames = thread["frameTable"]
+  stacks = thread["stackTable"]
+  samples = thread["samples"]
+
+  # A stack is a linked list through prefix pointers, so every stack shares its
+  # ancestors with others. Memoize the rendered path per stack index rather than
+  # walking to the root once per sample.
+  paths = {}
+  path_for = lambda do |stack_index|
+    cached = paths[stack_index]
+    next cached if cached
+
+    frame_name = strings[funcs["name"][frames["func"][stacks["frame"][stack_index]]]]
+    prefix = stacks["prefix"][stack_index]
+    paths[stack_index] = prefix.nil? ? frame_name : "#{path_for.call(prefix)};#{frame_name}"
+  end
+
+  counts = Hash.new(0)
+  samples["stack"].each_with_index do |stack_index, sample_index|
+    next if stack_index.nil?
+
+    weight = samples["weight"] ? samples["weight"][sample_index] : 1
+    counts[path_for.call(stack_index)] += weight
+  end
+
+  counts.sort_by { |_path, count| count }.map { |path, count| "#{path} #{count}\n" }.join
+end
+
+# Attribute each sample's weight to its leaf frame, giving self-time per method.
+# The profile is the Firefox profiler format Vernier emits.
+def top_self_time(profile_path, limit)
+  data = JSON.parse(File.read(profile_path))
+  rows = []
+
+  data["threads"].each do |thread|
+    strings = thread["stringArray"]
+    funcs = thread["funcTable"]
+    frames = thread["frameTable"]
+    stacks = thread["stackTable"]
+    samples = thread["samples"]
+
+    weights = Hash.new(0)
+    total = 0
+
+    samples["stack"].each_with_index do |stack_index, sample_index|
+      next if stack_index.nil?
+
+      weight = samples["weight"] ? samples["weight"][sample_index] : 1
+      func_index = frames["func"][stacks["frame"][stack_index]]
+      weights[func_index] += weight
+      total += weight
+    end
+
+    next if total.zero?
+
+    weights.each do |func_index, weight|
+      file = strings[funcs["fileName"][func_index]] if funcs["fileName"][func_index]
+      rows << {
+        name: strings[funcs["name"][func_index]],
+        location: file ? "#{file}:#{funcs["lineNumber"][func_index]}" : "",
+        percent: weight * 100.0 / total
+      }
+    end
+  end
+
+  rows.sort_by { |row| -row[:percent] }.first(limit)
+end
+
+def print_top_self_time(profile_path, limit)
+  rows = top_self_time(profile_path, limit)
+  return if rows.empty?
+
+  puts "  hottest frames (self time):"
+  rows.each do |row|
+    puts format("    %5.1f%%  %-45s %s", row[:percent], row[:name], row[:location])
+  end
+rescue => e
+  warn "  (could not summarize #{profile_path}: #{e.message})"
+end
+
+written = []
+
+options[:endpoints].each do |endpoint_name|
+  path = DEFAULT_ENDPOINTS.fetch(endpoint_name)
+
+  print "warmup #{endpoint_name}... "
+  drive(app, prebuild_envs(path, options[:warmup]))
+  puts "done"
+
+  envs = prebuild_envs(path, options[:iterations])
+  GC.start(full_mark: true, immediate_sweep: true)
+
+  output = File.join(options[:output_dir], "raxon-#{endpoint_name}-#{options[:mode]}.vernier.json")
+  profile_options = {
+    out: output,
+    mode: options[:mode],
+    interval: options[:interval]
+  }
+  profile_options[:allocation_interval] = options[:allocation_interval] if options[:allocation_interval].positive?
+
+  print "profile #{endpoint_name} (#{options[:mode]}, #{options[:iterations]} requests)... "
+  started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  Vernier.profile(**profile_options) { drive(app, envs) }
+  elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+
+  per_request_us = (elapsed / options[:iterations]) * 1_000_000
+  puts "#{elapsed.round(3)}s total, #{per_request_us.round(2)}us/request"
+
+  print_top_self_time(output, options[:top]) if options[:top].positive?
+
+  written << output
+
+  next unless options[:folded]
+
+  folded = output.sub(/\.vernier\.json\z/, ".folded")
+  File.write(folded, folded_stacks(output))
+  written << folded
+end
+
+puts "\nWrote #{written.length} file(s):"
+written.each { |file| puts "  #{file}" }
+puts "\nFlame graphs: open the .vernier.json at https://vernier.prof, or feed the"
+puts ".folded stacks to speedscope, flamegraph.pl, or inferno."
