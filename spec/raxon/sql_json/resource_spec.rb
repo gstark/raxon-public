@@ -106,7 +106,7 @@ module SqlJsonSpec
     columns :id, :title
 
     pluck :responsible_employee_names, from: :responsible_employees,
-      expression: ->(employees) { Arel::Nodes::Concat.new(Arel::Nodes::Concat.new(employees[:first_name], Arel::Nodes.build_quoted(" ")), employees[:last_name]) }
+      expression: ->(employees) { concat(employees[:first_name], " ", employees[:last_name]) }
 
     order { |row| row[:title] }
   end
@@ -376,6 +376,20 @@ RSpec.describe Raxon::SqlJson::Resource do
         {"id" => first.id, "title" => "First", "responsible_employee_names" => ["Ada Lovelace", "Alan Turing"]},
         {"id" => second.id, "title" => "Second", "responsible_employee_names" => []}
       ])
+    end
+
+    it "concats with quoted literals and skips a NULL part, as Ruby interpolation does" do
+      resource = Class.new(described_class) do
+        model SqlJsonSpec::Statistic
+        attribute(:label) { |row| concat(row[:name], " isn't ", row[:value]) }
+        pluck :names, from: :posts, expression: ->(posts) { concat("#", posts[:title]) }
+      end
+      revenue = statistic("Revenue", value: nil)
+      SqlJsonSpec::PostStatisticAssignment.create!(post: post("First"), statistic: revenue)
+
+      expect(parse(resource.new(SqlJsonSpec::Statistic.all)).first).to eq(
+        "label" => "Revenue isn't ", "names" => ["#First"]
+      )
     end
 
     it "applies the target's default scope and leaves the outer scope to the caller" do

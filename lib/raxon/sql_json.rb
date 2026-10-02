@@ -12,5 +12,6 @@ module Raxon
   end
 end
 
+require_relative "sql_json/functions"
 require_relative "sql_json/resource"
 require_relative "sql_json/component_builder"

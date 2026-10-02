@@ -196,6 +196,10 @@ module Raxon
     #   CatalogResource.new(scope).json # => "[{\"id\" : 1, ...}]"
     #
     class Resource
+      # SQL functions such as `concat` for `expression:`, `attribute`, and
+      # `order` blocks. See Raxon::SqlJson::Functions.
+      extend Functions
+
       # The outer row inside the query. Top-level attributes read their
       # columns from this alias; a nested resource reads from
       # `sql_json_row_1`, `sql_json_row_2`, and so on, one per depth. No alias

@@ -24,9 +24,7 @@ class PostTitleResource < Raxon::SqlJson::Resource
   columns :id, :title
 
   pluck :responsible_employee_names, from: :responsible_employees,
-    expression: ->(employees) {
-      Arel::Nodes::Concat.new(Arel::Nodes::Concat.new(employees[:first_name], Arel::Nodes.build_quoted(" ")), employees[:last_name])
-    }
+    expression: ->(employees) { concat(employees[:first_name], " ", employees[:last_name]) }
 
   order { |row| row[:title] }
 end
@@ -71,6 +69,16 @@ gets the full arrays for its discarded rows.
 A `pluck` takes `where:` (a Hash names columns of the target table, a String
 is raw SQL) and `distinct: true`. The association can be direct or
 `through:`, and its target's default scope applies.
+
+### SQL functions
+
+`expression:`, `attribute`, and `order` blocks can call these without a
+receiver. Each returns an Arel node. An argument that is not an Arel node or
+column becomes a quoted SQL literal.
+
+| Function | SQL | Notes |
+| --- | --- | --- |
+| `concat(a, " ", b)` | `concat(a, ' ', b)` | A NULL argument adds nothing, as `nil` does in Ruby interpolation. |
 
 `option` and `branch` turn attributes on or off for each request:
 
