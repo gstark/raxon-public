@@ -527,11 +527,14 @@ module Raxon
         end
 
         # The SQL for each attribute set a request can emit, keyed by the
-        # attribute names. Rendering walks every pluck's reflection chain
-        # through ActiveRecord, about 0.3 ms for a small declaration, and
-        # nothing in it varies between requests.
+        # attributes' object ids. Rendering walks every pluck's reflection
+        # chain through ActiveRecord, about 0.3 ms for a small declaration,
+        # and nothing in it varies between requests.
         #
-        # @return [Hash{Array<Symbol> => String}]
+        # The key is not the attribute names: two branches can declare the
+        # same name with different SQL.
+        #
+        # @return [Hash{Array<Integer> => String}]
         def sql_cache = @sql_cache ||= {}
 
         # @param attributes [Array<Struct>] the attributes to emit
@@ -615,7 +618,7 @@ module Raxon
       # @return [String]
       def select_sql
         active = attributes
-        self.class.sql_cache[active.map(&:name)] ||= begin
+        self.class.sql_cache[active.map(&:object_id)] ||= begin
           render = Render.new(@scope.connection, ROW, 0, self.class.model_class)
           "SELECT #{self.class.aggregate_sql(active, render)}::text\nFROM \"sql_json_scope\" #{render.row_alias}"
         end

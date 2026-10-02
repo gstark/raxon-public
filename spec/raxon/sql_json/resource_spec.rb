@@ -434,6 +434,19 @@ RSpec.describe Raxon::SqlJson::Resource do
       expect(row.keys).to include("alpha_post_ids")
     end
 
+    it "renders each branch's own SQL when two branches declare the same key" do
+      resource = Class.new(described_class) do
+        model SqlJsonSpec::Statistic
+        option :big, default: -> { true }
+        branch(big: true) { constant :size, "big" }
+        branch(big: false) { constant :size, "small" }
+      end
+      statistic("Revenue")
+
+      expect(parse(resource.new(SqlJsonSpec::Statistic.all, big: true)).first["size"]).to eq("big")
+      expect(parse(resource.new(SqlJsonSpec::Statistic.all, big: false)).first["size"]).to eq("small")
+    end
+
     it "refuses an unknown option" do
       expect { SqlJsonSpec::CatalogResource.new(SqlJsonSpec::Statistic.none, feature: true) }
         .to raise_error(ArgumentError, /unknown options feature/)
