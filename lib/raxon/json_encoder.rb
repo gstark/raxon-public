@@ -19,6 +19,8 @@ module Raxon
   #
   # An Alba resource is written as its #as_json. Alba's #to_json takes an
   # options hash and raises when JSON.generate passes it a JSON::State.
+  #
+  # A Raxon::SqlJson resource is written as the JSON text its query builds.
   module JSONEncoder
     # A BigDecimal whose exponent is larger than this is written in exponent
     # form ("0.1e41") rather than with every digit.
@@ -34,6 +36,8 @@ module Raxon
         JSON::Fragment.new(value.to_s((value.exponent.abs > PLAIN_EXPONENT_LIMIT) ? "E" : "F"))
       elsif value.is_a?(Alba::Resource)
         JSON::Fragment.new(CODER.dump(value.as_json))
+      elsif (fragment = Raxon.sql_json_fragment(value))
+        fragment
       else
         JSON::Fragment.new(JSON.generate(value))
       end

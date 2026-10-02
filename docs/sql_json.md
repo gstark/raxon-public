@@ -32,19 +32,23 @@ class PostTitleResource < Raxon::SqlJson::Resource
 end
 ```
 
-A route returns the JSON text as a `JSON::Fragment`:
+A route returns the resource:
 
 ```ruby
 Raxon.route do
   response :ok, type: :array, of: "PostTitle"
 
-  handle { JSON::Fragment.new(PostTitleResource.new(Current.organization.posts).json) }
+  handle { PostTitleResource.new(Current.organization.posts) }
 end
 ```
 
-Raxon sends the fragment's text as it is. When response validation is on, it
-parses the text and checks it against the declared schema. A fragment can
-also sit inside a larger body, such as `{data: fragment, total: count}`.
+Raxon runs the query and sends its text as it is. When response validation
+is on, it parses the text and checks it against the declared schema. The
+resource can also sit inside a larger body, such as
+`{data: PostTitleResource.new(posts), total: count}`. The query runs once,
+even when both validation and encoding read the resource.
+
+`resource.json` returns the text itself, for code outside a route.
 
 ## The scope decides the rows
 

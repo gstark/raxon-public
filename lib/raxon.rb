@@ -73,6 +73,17 @@ module Raxon
   # Needs ActiveRecord and Postgres, so it loads only when an application uses it.
   autoload :SqlJson, File.expand_path("raxon/sql_json", __dir__)
 
+  # The JSON a Raxon::SqlJson resource builds, as a JSON::Fragment, or nil for
+  # any other value. Response bodies pass through here, so a handler can return
+  # the resource itself. The check does not load SqlJson: until an application
+  # names it, no value can be one of its resources.
+  #
+  # @param value [Object]
+  # @return [JSON::Fragment, nil]
+  def self.sql_json_fragment(value)
+    JSON::Fragment.new(value.json) if !autoload?(:SqlJson) && value.is_a?(SqlJson::Resource)
+  end
+
   # Raised while reading a request body that exceeds the configured
   # max_request_body_size. Caught by the Router and turned into a 413 response;
   # it deliberately bypasses user exception handlers, since an over-limit body

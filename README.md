@@ -1061,10 +1061,11 @@ endpoint.validate_response false  # skip even when globally on
 
 A handler that already has the JSON text returns it as a `JSON::Fragment`.
 Raxon sends the text as it is, and validation parses it only when validation
-is on. A fragment can also go inside a body:
+is on. A `Raxon::SqlJson` resource is handled the same way, so a handler
+returns it as it is. Either can also go inside a body:
 
 ```ruby
-handle { JSON::Fragment.new(PostTitleResource.new(posts).json) }
+handle { PostTitleResource.new(posts) }
 handle { {data: JSON::Fragment.new(json_text), total: count} }
 ```
 

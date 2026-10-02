@@ -87,7 +87,10 @@ module Raxon
     private_constant :HALT_BODY_UNSET
 
     # Parses a JSON::Fragment into data for #validation_body.
-    PARSE_FRAGMENT = ->(value) { value.is_a?(JSON::Fragment) ? JSON.parse(value.json) : value }
+    PARSE_FRAGMENT = lambda do |value|
+      value = Raxon.sql_json_fragment(value) || value
+      value.is_a?(JSON::Fragment) ? JSON.parse(value.json) : value
+    end
     private_constant :PARSE_FRAGMENT
 
     # Initialize a new Response with an underlying Rack::Response.
@@ -151,7 +154,12 @@ module Raxon
 
     # Set the response body.
     # Accepts Hash, Array, String, an Alba resource, a JSON::Fragment of
-    # pre-encoded JSON, or any object that responds to to_json.
+    # pre-encoded JSON, a Raxon::SqlJson resource, or any object that responds
+    # to to_json.
+    #
+    # A Raxon::SqlJson resource runs its query here and is kept as the
+    # JSON::Fragment of its text, so #body returns the fragment. Nested in a
+    # Hash or Array, a resource stays as it is until encoding or validation.
     #
     # @param value [Hash, Array, String, Object] The response body
     #
@@ -159,7 +167,7 @@ module Raxon
     #   response.body = { success: true }
     #   response.body = "Plain text response"
     def body=(value)
-      @custom_body = value
+      @custom_body = Raxon.sql_json_fragment(value) || value
     end
 
     # Get the response body.
@@ -479,10 +487,10 @@ module Raxon
     # The body as response validation reads it: {#serializable_body} with
     # every JSON::Fragment parsed into data.
     #
-    # A handler that already has the JSON text, such as a Raxon::SqlJson
-    # result, returns it as a JSON::Fragment. Encoding writes the text as it
-    # is, at the top of the body or nested in it, and only validation parses
-    # it. A Hash or Array body is walked to find nested fragments, which costs
+    # A handler that already has the JSON text returns it as a
+    # JSON::Fragment, or returns the Raxon::SqlJson resource that builds it.
+    # Encoding writes the text as it is, at the top of the body or nested in
+    # it, and only validation parses it. A Hash or Array body is walked to find nested fragments, which costs
     # a walk of the body when validation is on and nothing when it is off.
     #
     # @return [Object] the body with no JSON::Fragment left in it

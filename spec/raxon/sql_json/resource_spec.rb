@@ -515,11 +515,55 @@ RSpec.describe Raxon::SqlJson::Resource do
         SqlJsonSpec::PostStatisticAssignment.create!(post: post("First"), statistic: revenue)
         statistic("Empty")
         response = Raxon::Response.new
-        response.body = JSON::Fragment.new(resource.new(SqlJsonSpec::Statistic.all).json)
+        response.body = resource.new(SqlJsonSpec::Statistic.all)
 
         result = endpoint.response_schemas[200].call(response.validation_body)
 
         expect(result.errors.to_h).to eq({})
+      end
+    end
+
+    describe "as a response body" do
+      def queries
+        count = 0
+        counter = ->(*, payload) { count += 1 unless payload[:name] == "SCHEMA" }
+        ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { yield }
+        count
+      end
+
+      it "is sent as its text and validated as its data, with one query" do
+        post("First")
+        resource = SqlJsonSpec::PostTitleResource.new(SqlJsonSpec::Post.all)
+        response = Raxon::Response.new
+        sent = nil
+
+        count = queries do
+          response.body = resource
+          response.validation_body
+          sent = response.to_rack[2].first
+        end
+
+        expect(count).to eq(1)
+        expect(sent).to eq(resource.json)
+        expect(response.validation_body).to eq([{"id" => SqlJsonSpec::Post.first.id, "title" => "First", "responsible_employee_names" => []}])
+      end
+
+      it "is sent and validated nested in a body, with one query" do
+        post("First")
+        resource = SqlJsonSpec::PostTitleResource.new(SqlJsonSpec::Post.all)
+        response = Raxon::Response.new
+        response.body = {data: resource, total: 1}
+        sent = nil
+        validated = nil
+
+        count = queries do
+          validated = response.validation_body
+          sent = response.to_rack[2].first
+        end
+
+        expect(count).to eq(1)
+        expect(sent).to eq(%({"data":#{resource.json},"total":1}))
+        expect(validated).to eq({data: JSON.parse(resource.json), total: 1})
       end
     end
 

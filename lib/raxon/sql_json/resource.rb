@@ -590,12 +590,13 @@ module Raxon
         @options = self.class.options.to_h { |name, default| [name, options.key?(name) ? options[name] : default.call] }
       end
 
-      # Runs the query. A handler returns the text as
-      # `JSON::Fragment.new(resource.json)`: Raxon sends it as it is, and
-      # response validation parses it.
+      # Runs the query once; later calls return the same text. A handler
+      # returns the resource itself, at the top of the body or nested in it:
+      # Raxon sends this text as it is, and response validation parses it.
+      # Encoding and validation of a nested resource share the one query.
       #
       # @return [String] the JSON array text; "[]" when the scope is empty
-      def json = @scope.connection.select_value(sql)
+      def json = @json ||= @scope.connection.select_value(sql)
 
       # The full query. Useful in a console to inspect what a declaration
       # compiles to or to EXPLAIN it.
