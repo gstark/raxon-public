@@ -547,6 +547,79 @@ RSpec.describe Raxon::Response do
     end
   end
 
+  describe "an Alba resource body" do
+    let(:resource) do
+      Class.new do
+        include Alba::Resource
+
+        attributes :id, :name
+      end
+    end
+    let(:person) { Struct.new(:id, :name).new(7, "Ada") }
+
+    it "encodes the resource without a body_serializer" do
+      response = Raxon::Response.new
+      response.body = resource.new(person)
+
+      _status, _headers, body = response.to_rack
+
+      expect(body.first).to eq('{"id":7,"name":"Ada"}')
+    end
+
+    it "exposes the resource's data through #serializable_body for validation" do
+      response = Raxon::Response.new
+      response.body = resource.new(person)
+
+      expect(response.serializable_body).to eq({"id" => 7, "name" => "Ada"})
+    end
+
+    it "serializes the resource once" do
+      response = Raxon::Response.new
+      response.body = resource.new(person)
+
+      expect(response.serializable_body).to be(response.serializable_body)
+    end
+  end
+
+  describe "a JSON::Fragment body" do
+    it "sends the fragment's text as it is, as JSON" do
+      response = Raxon::Response.new
+      response.body = JSON::Fragment.new(%([{"id" : 1}]))
+
+      _status, headers, body = response.to_rack
+
+      expect(body.first).to eq(%([{"id" : 1}]))
+      expect(headers["content-type"]).to eq("application/json")
+    end
+
+    it "sends a fragment nested in the body as it is" do
+      response = Raxon::Response.new
+      response.body = {data: JSON::Fragment.new(%([{"id" : 1}])), total: 1}
+
+      _status, _headers, body = response.to_rack
+
+      expect(body.first).to eq(%({"data":[{"id" : 1}],"total":1}))
+    end
+
+    it "parses a fragment, at the top or nested, for validation" do
+      top = Raxon::Response.new
+      top.body = JSON::Fragment.new(%([{"id" : 1}]))
+      nested = Raxon::Response.new
+      nested.body = {data: [JSON::Fragment.new(%({"id" : 1}))], total: 1}
+
+      expect(top.validation_body).to eq([{"id" => 1}])
+      expect(nested.validation_body).to eq({data: [{"id" => 1}], total: 1})
+    end
+
+    it "validates a body with no fragment as the body itself" do
+      response = Raxon::Response.new
+      body = {data: [{id: 1}]}
+      response.body = body
+
+      expect(response.validation_body).to be(body)
+    end
+  end
+
   describe "#to_rack" do
     it "converts to Rack response array" do
       response = Raxon::Response.new

@@ -47,6 +47,9 @@
     <script>
       window.onload = function() {
         var spec = JSON.parse(document.getElementById("openapi-spec").textContent);
+        // Opened from disk, the page has no server to call and no URL to
+        // explore, so it hides the Explore bar and "Try it out".
+        var fromFile = location.protocol === "file:"
         const ui = SwaggerUIBundle({
           spec: spec,
           dom_id: '#swagger-ui',
@@ -58,7 +61,15 @@
           plugins: [
             SwaggerUIBundle.plugins.DownloadUrl
           ],
-          layout: "StandaloneLayout"
+          layout: fromFile ? "BaseLayout" : "StandaloneLayout",
+          supportedSubmitMethods: fromFile ? [] : undefined,
+          onComplete: function() {
+            // Swagger UI resolves $ref against the page URL, and its
+            // OpenAPI 3.1 resolver cannot use a file:// URL.
+            if (fromFile) {
+              ui.specActions.updateUrl("https://api.invalid/api.json")
+            }
+          }
         })
         window.ui = ui
       }

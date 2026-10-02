@@ -90,6 +90,11 @@ module Raxon
           default_spec.from_table(name, resource, table_name, &block)
         end
 
+        # @see Specification#from_sql_json
+        def from_sql_json(name, resource, &block)
+          default_spec.from_sql_json(name, resource, &block)
+        end
+
         # @see Specification#to_open_api
         def to_open_api
           default_spec.to_open_api

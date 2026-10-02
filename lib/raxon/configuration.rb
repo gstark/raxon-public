@@ -132,7 +132,11 @@ module Raxon
       # coerced too, not only a top-level one. It therefore receives every node,
       # including nil, plain hashes, and leaf strings, and must return anything it
       # does not recognize unchanged (the recursion rebuilds a container only when
-      # a descendant actually changed). nil (default) leaves the body untouched.
+      # a descendant actually changed). nil (default) leaves the body untouched,
+      # except that a top-level Alba resource becomes its #as_json. An Alba
+      # resource nested in a Hash or Array still encodes correctly without a
+      # serializer, but response validation sees the resource object, so set
+      # one when such a route is validated.
       @body_serializer = nil
     end
 

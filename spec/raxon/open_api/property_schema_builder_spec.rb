@@ -480,3 +480,83 @@ RSpec.describe Raxon::OpenApi::PropertySchemaBuilder, "arrays of objects" do
     expect(schema.call(rows: "not-an-array")).not_to be_success
   end
 end
+
+RSpec.describe Raxon::OpenApi::PropertySchemaBuilder, "integers" do
+  def request_schema(field)
+    builder = described_class.new
+    Dry::Schema.Params { builder.add_field_to_schema(self, :count, field) }
+  end
+
+  # params.integer coerces with Integer(), which truncates a Float: 4.5
+  # became 4 and the fraction was silently lost.
+  it "rejects a fractional number rather than truncating it" do
+    result = request_schema(Raxon::OpenApi::Property.new(type: :integer)).call(count: 4.5)
+
+    expect(result.errors.to_h).to eq(count: ["must be an integer"])
+  end
+
+  it "still accepts a whole number sent as a float or a string" do
+    schema = request_schema(Raxon::OpenApi::Property.new(type: :integer))
+
+    expect(schema.call(count: 4.0).to_h).to eq(count: 4)
+    expect(schema.call(count: "4").to_h).to eq(count: 4)
+  end
+
+  it "keeps a response integer uncoerced" do
+    builder = described_class.new(response: true)
+    field = Raxon::OpenApi::Property.new(type: :integer)
+    schema = Dry::Schema.JSON { builder.add_field_to_schema(self, :count, field) }
+
+    expect(schema.call(count: "4").errors.to_h).to eq(count: ["must be an integer"])
+  end
+end
+
+RSpec.describe Raxon::OpenApi::PropertySchemaBuilder, "union types" do
+  def schema_for(field, response: false)
+    builder = described_class.new(response: response)
+    if response
+      Dry::Schema.JSON { builder.add_field_to_schema(self, :value, field) }
+    else
+      Dry::Schema.Params { builder.add_field_to_schema(self, :value, field) }
+    end
+  end
+
+  # dry_schema_type had no case for an Array type, so a union fell through to
+  # :string and a number was rejected although the document said anyOf.
+  it "accepts a value that matches any member" do
+    schema = schema_for(Raxon::OpenApi::Property.new(type: [:string, :number]))
+
+    number = schema.call(value: 5)
+    text = schema.call(value: "five")
+
+    expect(number).to be_success
+    expect(number.to_h[:value]).to be_a(Float)
+    expect(text).to be_success
+    expect(text.to_h).to eq(value: "five")
+  end
+
+  it "rejects a value that matches no member, naming each" do
+    schema = schema_for(Raxon::OpenApi::Property.new(type: [:string, :number]))
+
+    expect(schema.call(value: true).errors.to_h).to eq(value: ["must be a string or must be a float"])
+  end
+
+  it "accepts nil only when nullable" do
+    expect(schema_for(Raxon::OpenApi::Property.new(type: [:string, :number])).call(value: nil)).not_to be_success
+    expect(schema_for(Raxon::OpenApi::Property.new(type: [:string, :number], nullable: true)).call(value: nil)).to be_success
+  end
+
+  it "still applies an enum" do
+    schema = schema_for(Raxon::OpenApi::Property.new(type: [:string, :integer], enum: ["a", 1]))
+
+    expect(schema.call(value: 1)).to be_success
+    expect(schema.call(value: "b").errors.to_h).to eq(value: ["must be one of: a, 1"])
+  end
+
+  it "checks a response union without coercion" do
+    schema = schema_for(Raxon::OpenApi::Property.new(type: [:string, :number]), response: true)
+
+    expect(schema.call(value: 5)).to be_success
+    expect(schema.call(value: true).errors.to_h).to eq(value: ["must be a string or must be an integer or must be a float or must be a decimal"])
+  end
+end

@@ -320,8 +320,8 @@ module Raxon
 
       # Validate the coerced data, not the raw body: a handler may have returned a
       # serializer object that config.body_serializer turns into the hash/array
-      # the schema describes.
-      result = schema.call(response.serializable_body)
+      # the schema describes, or a JSON::Fragment of pre-encoded JSON.
+      result = schema.call(response.validation_body)
       return if result.success?
 
       handle_response_validation_failure(request, response, status_code, result.errors.to_h, validation_mode)

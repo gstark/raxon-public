@@ -176,9 +176,20 @@ module Raxon
 
         private
 
+        # dry-schema keys its errors by Symbol, but UndeclaredKeys keys them as
+        # the body does, and a body parsed from JSON has String keys. A plain
+        # merge kept :users and "users" apart, and JSON.generate wrote the key
+        # twice, so a client kept one set of errors and lost the other. A key
+        # here joins the existing key that names the same field.
         def deep_merge(errors, extra)
-          errors.merge(extra) do |_key, left, right|
-            (left.is_a?(Hash) && right.is_a?(Hash)) ? deep_merge(left, right) : right
+          extra.each_with_object(errors.dup) do |(key, right), merged|
+            existing = merged.key?(key) ? key : merged.keys.find { |candidate| candidate.to_s == key.to_s }
+            left = existing && merged[existing]
+            if left.is_a?(Hash) && right.is_a?(Hash)
+              merged[existing] = deep_merge(left, right)
+            else
+              merged[existing || key] = right
+            end
           end
         end
       end

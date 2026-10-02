@@ -44,4 +44,35 @@ RSpec.describe Raxon::JSONEncoder do
     expect(described_class.generate(data.except(:big))).to eq(JSON.generate(data.except(:big)))
     expect(described_class.generate(data)).to end_with(%("big":0.1e101}))
   end
+
+  # Alba's #to_json takes an options hash, so the JSON::State that
+  # JSON.generate passes it raises NoMethodError. The encoder calls #as_json.
+  describe "with an Alba resource" do
+    let(:item) { Struct.new(:id, :price) }
+    let(:resource) do
+      Class.new do
+        include Alba::Resource
+
+        attributes :id, :price
+      end
+    end
+
+    it "writes the resource as its data" do
+      expect(described_class.generate(resource.new(item.new(7, BigDecimal("1.5"))))).to eq(%({"id":7,"price":1.5}))
+    end
+
+    it "writes a collection resource as an array" do
+      expect(described_class.generate(resource.new([item.new(1, nil), item.new(2, nil)]))).to eq(%([{"id":1,"price":null},{"id":2,"price":null}]))
+    end
+
+    it "writes a resource nested in the data" do
+      expect(described_class.generate({items: [resource.new(item.new(1, nil))]})).to eq(%({"items":[{"id":1,"price":null}]}))
+    end
+
+    it "writes the resource's root key, as its #to_json does" do
+      rooted = Class.new(resource) { root_key :item }
+
+      expect(described_class.generate(rooted.new(item.new(1, nil)))).to eq(%({"item":{"id":1,"price":null}}))
+    end
+  end
 end

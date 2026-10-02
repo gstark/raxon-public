@@ -9,6 +9,9 @@ group :development, :test do
   # ActiveRecord schema-introspection adapter and instrumentation against it.
   gem "activerecord", ">= 7.0", "< 9"
   gem "flog"
+  # Raxon::SqlJson runs its queries against Postgres; its specs skip when
+  # DATABASE_URL is unset.
+  gem "pg", "~> 1.5"
   gem "puma", "~> 7.0"
   gem "rake", "~> 13.0"
   gem "rackup", "~> 2.0"

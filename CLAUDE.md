@@ -215,6 +215,20 @@ end
 
 Sibling to `from_resource` for tables without a model class (e.g. owned by a ROM relation). The third argument is a table name; columns are introspected via the detected schema adapter, using the same type mapping. Because there is no model class, inclusion validators cannot be introspected — declare enum-like properties in the block with `allowable_values`. When the database is unavailable, only block-declared properties are emitted.
 
+#### Auto-Generation from SqlJson declarations
+
+```ruby
+OpenApi.from_sql_json(:PostTitle, PostTitleResource) do |component|
+  component.property :archived, type: :boolean  # computed attributes are untyped
+end
+```
+
+`Specification#from_sql_json` stays free of ActiveRecord: it calls
+`resource.document(component, name)`, and `SqlJson::ComponentBuilder` maps the
+attributes (columns through `ColumnMapper`, plucks, constants, nested
+resources). The resource records the name so a declaration that nests it
+emits a `$ref`.
+
 #### Schema Introspection (no ORM dependency)
 
 Raxon has **no runtime dependency on ActiveRecord, Sequel, or ROM**. `from_resource`/`from_table` introspect through `Raxon::OpenApi::SchemaIntrospection`, which picks an adapter per call:
@@ -223,6 +237,8 @@ Raxon has **no runtime dependency on ActiveRecord, Sequel, or ROM**. `from_resou
 2. `ActiveRecordAdapter` when ActiveRecord is loaded by the host app
 3. `SequelAdapter` when Sequel is loaded (covers ROM via rom-sql; column comments and inclusion validators are not available there)
 4. None → components emit only block-declared properties
+
+`Raxon::SqlJson` (`lib/raxon/sql_json/`) is the one feature that needs ActiveRecord and Postgres. `lib/raxon.rb` only `autoload`s it, so it loads when an application names the constant, and it raises if ActiveRecord is not loaded. Its specs connect through their own abstract model class, never `ActiveRecord::Base`, and skip unless `DATABASE_URL` names a Postgres database. See [docs/sql_json.md](docs/sql_json.md).
 
 The same rule applies to instrumentation: `ActiveSupport::Notifications` is optional, and `Raxon::Instrumentation` yields straight through without it. Never add a hard require or constant reference to a persistence library in `lib/` — extend `SchemaIntrospection` with a new adapter instead.
 

@@ -86,6 +86,10 @@ module Raxon
     HALT_BODY_UNSET = Object.new.freeze
     private_constant :HALT_BODY_UNSET
 
+    # Parses a JSON::Fragment into data for #validation_body.
+    PARSE_FRAGMENT = ->(value) { value.is_a?(JSON::Fragment) ? JSON.parse(value.json) : value }
+    private_constant :PARSE_FRAGMENT
+
     # Initialize a new Response with an underlying Rack::Response.
     #
     # @param endpoint [Raxon::OpenApi::Endpoint, nil] Optional endpoint for accessing route metadata
@@ -146,7 +150,8 @@ module Raxon
     end
 
     # Set the response body.
-    # Accepts Hash, Array, String, or any object that responds to to_json.
+    # Accepts Hash, Array, String, an Alba resource, a JSON::Fragment of
+    # pre-encoded JSON, or any object that responds to to_json.
     #
     # @param value [Hash, Array, String, Object] The response body
     #
@@ -456,14 +461,34 @@ module Raxon
     # only: assigning a new body misses it, and reading #body clears it, since
     # code that changes the body in place through the response must read it
     # first.
+    #
+    # Without a serializer, a top-level Alba resource becomes its #as_json, so
+    # validation sees the data. A resource nested in a Hash or Array is left for
+    # Raxon::JSONEncoder to write; walking every body to find one costs more
+    # than encoding it.
     def serializable_body
       serializer = Raxon.configuration.body_serializer
-      return @custom_body unless serializer
+      return @custom_body unless serializer || @custom_body.is_a?(Alba::Resource)
       return @serialized_body if !@serialized_source.nil? && @serialized_source.equal?(@custom_body)
 
-      @serialized_body = deep_serialize(@custom_body, serializer)
+      @serialized_body = serializer ? deep_serialize(@custom_body, serializer) : @custom_body.as_json
       @serialized_source = @custom_body
       @serialized_body
+    end
+
+    # The body as response validation reads it: {#serializable_body} with
+    # every JSON::Fragment parsed into data.
+    #
+    # A handler that already has the JSON text, such as a Raxon::SqlJson
+    # result, returns it as a JSON::Fragment. Encoding writes the text as it
+    # is, at the top of the body or nested in it, and only validation parses
+    # it. A Hash or Array body is walked to find nested fragments, which costs
+    # a walk of the body when validation is on and nothing when it is off.
+    #
+    # @return [Object] the body with no JSON::Fragment left in it
+    def validation_body
+      body = serializable_body
+      body.is_a?(JSON::Fragment) ? JSON.parse(body.json) : deep_serialize(body, PARSE_FRAGMENT)
     end
 
     # Set a response header. The name is stored lowercase, as Rack 3 requires,
@@ -506,8 +531,11 @@ module Raxon
     end
 
     def serialized_custom_body
-      data = serializable_body
-      data.is_a?(String) ? data : Raxon::JSONEncoder.generate(data)
+      case (data = serializable_body)
+      when String then data
+      when JSON::Fragment then data.json
+      else Raxon::JSONEncoder.generate(data)
+      end
     end
 
     # The Rack tuple for a streaming response. Bypasses Rack::Response#finish:

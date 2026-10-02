@@ -46,6 +46,14 @@ module Raxon
       # BigDecimal is one too: Raxon::JSONEncoder writes it as a number.
       RESPONSE_NUMBER = (Dry::Types["strict.integer"] | Dry::Types["strict.float"] | Dry::Types["strict.decimal"]).freeze
 
+      # An integer in a request. params.integer coerces with Integer(), which
+      # truncates a Float: 4.5 became 4 and the fraction was silently lost.
+      # Handing it the fraction as a String makes Integer() reject it, so it
+      # answers "must be an integer"; a whole 4.0 still coerces to 4.
+      WHOLE_INTEGER = Dry::Types["params.integer"].prepend { |value|
+        (value.is_a?(Float) && value.finite? && value != value.truncate) ? value.to_s : value
+      }.freeze
+
       # @param response [Boolean] Build fields for a response schema. A
       #   response schema checks the values the handler returns and coerces
       #   none of them, so `number` must accept an Integer as well as a Float.
@@ -68,6 +76,8 @@ module Raxon
       end
 
       def add_field_to_schema(schema_context, field_name, field)
+        return add_union_field(schema_context, field_name, field) if field.type.is_a?(Array)
+
         case field.type
         when "object"
           add_object_field(schema_context, field_name, field)
@@ -231,6 +241,38 @@ module Raxon
         end
       end
 
+      # A union type (`type: [:string, :number]`) accepts a value any member
+      # accepts, as the anyOf in the document says. Before this it had no case
+      # of its own, fell through dry_schema_type to :string, and rejected every
+      # value that was not a string.
+      def add_union_field(schema_context, field_name, field)
+        key = field_key(schema_context, field_name, field)
+        type = field.type.map { |member| union_member_type(member) }.reduce(:|)
+        constraints = enum_constraint(field)
+
+        if field.nullable
+          key.maybe(type, **constraints)
+        else
+          key.value(type, **constraints)
+        end
+      end
+
+      # The dry type for one member of a union. A sum needs type objects, not
+      # the symbols the other fields pass, and a request member coerces where
+      # a response member does not.
+      def union_member_type(member)
+        case dry_schema_type(member.to_s)
+        when :string then Dry::Types["strict.string"]
+        when :float then @response ? RESPONSE_NUMBER : Dry::Types["params.float"]
+        when :integer then @response ? Dry::Types["strict.integer"] : WHOLE_INTEGER
+        when :bool then Dry::Types[@response ? "strict.bool" : "params.bool"]
+        when :hash then Dry::Types["strict.hash"]
+        when :array then Dry::Types["strict.array"]
+        when :any then Dry::Types["any"]
+        else runtime_type(dry_schema_type(member.to_s))
+        end
+      end
+
       def add_file_field(schema_context, field_name, field)
         key = field_key(schema_context, field_name, field)
 
@@ -272,6 +314,7 @@ module Raxon
       def runtime_type(type)
         return TEMPORAL if type == :temporal
         return RESPONSE_NUMBER if type == :float && @response
+        return WHOLE_INTEGER if type == :integer && !@response
 
         FORMATTED.fetch(type, type)
       end

@@ -70,7 +70,11 @@ RSpec.describe "Raxon rake tasks" do
       expect(spec["openapi"]).to eq("3.1.0")
       expect(spec["paths"]).to have_key("/api/v1/json_test")
 
-      expect(File.read(html_path)).to include("swagger")
+      html = File.read(html_path)
+      expect(html).to include("swagger")
+      # Swagger UI cannot resolve $ref from a file:// page without a web URL.
+      expect(html).to include('location.protocol === "file:"')
+      expect(html).to include('updateUrl("https://api.invalid/api.json")')
     end
   end
 end

@@ -197,6 +197,53 @@ RSpec.describe Raxon::EndpointInvocation do
       Raxon.configuration.body_serializer = nil
     end
 
+    it "validates a returned Alba resource as its data without a body_serializer" do
+      resource = Class.new do
+        include Alba::Resource
+
+        attributes :id
+      end
+
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :object do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| resource.new(Struct.new(:id).new(7)) }
+
+      response = run(endpoint)
+      _status, _headers, body = response.to_rack
+
+      expect(response.status_code).to eq(200)
+      expect(body.join).to eq(%({"id":7}))
+    end
+
+    it "validates a returned JSON::Fragment as the data it encodes" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :array do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| JSON::Fragment.new(%([{"id" : 7}])) }
+
+      response = run(endpoint)
+      _status, _headers, body = response.to_rack
+
+      expect(response.status_code).to eq(200)
+      expect(body.join).to eq(%([{"id" : 7}]))
+    end
+
+    it "flags a returned JSON::Fragment whose data violates the schema" do
+      endpoint = Raxon::OpenApi::Endpoint.new
+      endpoint.response 200, type: :array do |resp|
+        resp.property :id, type: :integer, required: true
+      end
+      endpoint.handle { |_req, _res, _meta| JSON::Fragment.new(%([{"id" : "seven"}])) }
+
+      response = run(endpoint)
+
+      expect(response.status_code).to eq(500)
+      expect(response.body[:error]).to eq("Response validation failed")
+    end
+
     it "flags a returned serializer whose data violates the schema" do
       serializer = Struct.new(:data) do
         def serializable_hash = data

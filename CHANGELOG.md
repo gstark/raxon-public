@@ -167,6 +167,16 @@ release.
 
 ### Fixed
 
+- A request integer no longer truncates a fraction. `4.5` for a `type:
+  :integer` field answered as `4`; it now fails with "must be an integer".
+  A whole `4.0` still coerces to `4`.
+- A union type (`type: [:string, :number]`) accepts a value any member
+  accepts, as the `anyOf` in the document says. It was validated as a string
+  and rejected every number.
+- Response validation reports all of a field's errors under one key. For a
+  body with String keys, type errors and undeclared-key errors for the same
+  field were kept under both `:users` and `"users"`, so the JSON carried the
+  key twice and a client saw only one set.
 - Path parameters reached the handler still percent-encoded, as binary
   strings: `/users/a%20b` gave `"a%20b"`. `Request#path_params` now decodes
   each value once into UTF-8 (`"a b"`; a `+` stays literal). A value that

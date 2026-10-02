@@ -593,3 +593,23 @@ RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator, "undeclared keys" do
     end
   end
 end
+
+# A body parsed from JSON has String keys, but dry-schema reports errors under
+# Symbol keys. Merged naively, one field's errors land under both :users and
+# "users", and JSON.generate writes the key twice: a client keeps only the
+# second, and loses the other errors.
+RSpec.describe Raxon::OpenApi::ResponseSchemaGenerator, "errors for a String-keyed body" do
+  it "reports type errors and undeclared keys for one field under one key" do
+    response = Raxon::OpenApi::Response.new(type: :object).tap do |r|
+      r.property :users, type: :array, of: :object do |user|
+        user.property :id, type: :number
+      end
+    end
+    validator = described_class.new(response, components: []).to_dry_schema
+
+    result = validator.call("users" => [{"id" => 1}, {"extra" => 2}])
+
+    expect(JSON.parse(JSON.generate(result.errors.to_h)))
+      .to eq("users" => {"1" => {"id" => ["is missing"], "extra" => ["is not allowed"]}})
+  end
+end

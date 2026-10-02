@@ -16,6 +16,9 @@ module Raxon
   # directly would not: ActiveSupport's Time#to_json writes ISO 8601 when it
   # gets no JSON::State, and JSON.generate passes one.) A key that is not a
   # String or Symbol is written with #to_s, as JSON.generate does.
+  #
+  # An Alba resource is written as its #as_json. Alba's #to_json takes an
+  # options hash and raises when JSON.generate passes it a JSON::State.
   module JSONEncoder
     # A BigDecimal whose exponent is larger than this is written in exponent
     # form ("0.1e41") rather than with every digit.
@@ -29,6 +32,8 @@ module Raxon
 
         # The format is explicit: ActiveSupport makes "F" the default.
         JSON::Fragment.new(value.to_s((value.exponent.abs > PLAIN_EXPONENT_LIMIT) ? "E" : "F"))
+      elsif value.is_a?(Alba::Resource)
+        JSON::Fragment.new(CODER.dump(value.as_json))
       else
         JSON::Fragment.new(JSON.generate(value))
       end

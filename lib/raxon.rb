@@ -70,6 +70,9 @@ require_relative "raxon/version"
 module Raxon
   class Error < StandardError; end
 
+  # Needs ActiveRecord and Postgres, so it loads only when an application uses it.
+  autoload :SqlJson, File.expand_path("raxon/sql_json", __dir__)
+
   # Raised while reading a request body that exceeds the configured
   # max_request_body_size. Caught by the Router and turned into a 413 response;
   # it deliberately bypasses user exception handlers, since an over-limit body

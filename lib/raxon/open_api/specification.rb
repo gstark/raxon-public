@@ -146,6 +146,26 @@ module Raxon
         build_from_attributes(name, resource, columns, &block)
       end
 
+      # Generate a component schema from a Raxon::SqlJson::Resource
+      # declaration, so a route that builds its body in Postgres needs no
+      # Alba resource for the document.
+      #
+      # Block-declared properties come first and win, as in from_resource.
+      # The resource then declares the rest (see SqlJson::ComponentBuilder)
+      # and records the name, so a later declaration that nests it refers to
+      # this component. Declare a nested resource's component first.
+      #
+      # @param name [Symbol, String] The component name
+      # @param resource [Class<Raxon::SqlJson::Resource>] The declaration
+      # @yield [Component] The component object for additional configuration
+      # @return [Component]
+      def from_sql_json(name, resource)
+        component(name, type: :object) do |component|
+          yield component if block_given?
+          resource.document(component, name)
+        end
+      end
+
       # Generate the complete OpenAPI document for this specification.
       #
       # @return [Hash] Complete OpenAPI document with string keys

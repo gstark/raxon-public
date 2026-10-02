@@ -1059,6 +1059,17 @@ endpoint.validate_response true   # validate even when globally off
 endpoint.validate_response false  # skip even when globally on
 ```
 
+A handler that already has the JSON text returns it as a `JSON::Fragment`.
+Raxon sends the text as it is, and validation parses it only when validation
+is on. A fragment can also go inside a body:
+
+```ruby
+handle { JSON::Fragment.new(PostTitleResource.new(posts).json) }
+handle { {data: JSON::Fragment.new(json_text), total: count} }
+```
+
+A plain String body is sent as it is too, but validation cannot check it.
+
 ### Representations
 
 Register a representation once to connect an OpenAPI component and serializer,
@@ -1229,6 +1240,7 @@ Raxon has **no runtime dependency on any ORM** — not ActiveRecord, not Sequel,
 
 - **Schema introspection** (`from_resource` / `from_table` below) resolves an adapter per call: `config.schema_adapter` if you set one, otherwise ActiveRecord when it's loaded, otherwise Sequel when it's loaded (which covers ROM, since rom-sql connects through Sequel). With no adapter — or no reachable database, as in `rake openapi:generate` on CI — components emit only their block-declared properties.
 - **Instrumentation** uses `ActiveSupport::Notifications` when present and yields straight through when it isn't.
+- **SqlJson** (`Raxon::SqlJson::Resource`) builds a list body in Postgres in one query from an ActiveRecord scope. It loads only when your code names it. See the [SqlJson guide](docs/sql_json.md).
 
 ### Generating Components from the Database
 
@@ -1251,6 +1263,12 @@ end
 ```
 
 Without a model class there are no validators to introspect, so declare enum-like properties in the block as shown.
+
+For a `Raxon::SqlJson::Resource` declaration, use `from_sql_json`. It maps the declaration's columns the same way, so the route needs no Alba resource. See the [SqlJson guide](docs/sql_json.md#openapi).
+
+```ruby
+Raxon::OpenApi::DSL.from_sql_json(:PostTitle, PostTitleResource)
+```
 
 ### Using Raxon with ROM
 
@@ -1299,7 +1317,7 @@ Raxon.route do
 
   handler do |_request, response, _metadata|
     notes = ROM_CONTAINER.relations[:release_notes].with(auto_struct: true).to_a
-    response.ok ReleaseNoteResource.new(notes).serializable_hash
+    response.ok ReleaseNoteResource.new(notes)
   end
 end
 ```
