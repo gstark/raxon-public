@@ -20,9 +20,12 @@ module Raxon
     ].freeze
 
     # Anchored copies of the Regexp entries in +config.allowed_hosts+, keyed by
-    # the configured Regexp, so a request does not compile a new one.
-    ANCHORED_HOST_PATTERNS = Hash.new do |cache, entry|
-      cache[entry] = Regexp.new("\\A(?:#{entry.source})\\z", entry.options)
+    # the configured Regexp and +config.regexp_timeout+, so a request does not
+    # compile a new one. The timeout bounds a backtracking pattern matched
+    # against the client-supplied host.
+    ANCHORED_HOST_PATTERNS = Hash.new do |cache, key|
+      entry, timeout = key
+      cache[key] = Regexp.new("\\A(?:#{entry.source})\\z", entry.options, timeout: timeout)
     end
 
     module_function
@@ -86,13 +89,20 @@ module Raxon
       Array(allowed).any? { |entry| host_matches?(entry, host) }
     end
 
+    # A Regexp match that runs past +config.regexp_timeout+ does not match,
+    # so the host is blocked.
+    #
     # @param entry [String, Regexp]
     # @param host [String]
     # @return [Boolean]
     def host_matches?(entry, host)
       case entry
       when Regexp
-        ANCHORED_HOST_PATTERNS[entry].match?(host)
+        begin
+          ANCHORED_HOST_PATTERNS[[entry, Raxon.configuration.regexp_timeout]].match?(host)
+        rescue Regexp::TimeoutError
+          false
+        end
       else
         pattern = entry.to_s.downcase
         if pattern.start_with?(".")

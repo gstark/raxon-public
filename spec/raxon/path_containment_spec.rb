@@ -89,6 +89,74 @@ RSpec.describe "Route and helper symlink containment" do
     end
   end
 
+  describe "ERB template companions" do
+    before do
+      Raxon.reset!
+      Raxon.configure do |c|
+        c.routes_directory = routes_dir
+        c.reload_routes = false
+      end
+    end
+
+    def html_route_body
+      <<~RUBY
+        Raxon.route do
+          handler { |_req, res, _m| res.html_body = res.html(name: "world") }
+        end
+      RUBY
+    end
+
+    def page_dir
+      File.join(routes_dir, "page").tap { |d| FileUtils.mkdir_p(d) }
+    end
+
+    def render_page
+      status, _headers, body = Raxon::Server.new.call(Rack::MockRequest.env_for("/page"))
+      [status, body.each.to_a.join]
+    end
+
+    it "renders a template inside the tree" do
+      File.write(File.join(page_dir, "get.rb"), html_route_body)
+      File.write(File.join(page_dir, "get.html.erb"), "<h1>Hello <%= name %></h1>")
+
+      expect(render_page).to eq([200, "<h1>Hello world</h1>"])
+    end
+
+    it "renders a template reached through an in-tree symlink" do
+      File.write(File.join(page_dir, "get.rb"), html_route_body)
+      shared = File.join(routes_dir, "shared.html.erb")
+      File.write(shared, "<p><%= name %></p>")
+      File.symlink(shared, File.join(page_dir, "get.html.erb"))
+
+      expect(render_page).to eq([200, "<p>world</p>"])
+    end
+
+    it "refuses to load a template that symlinks outside the tree" do
+      File.write(File.join(page_dir, "get.rb"), html_route_body)
+      outside = File.join(@root, "evil.html.erb")
+      File.write(outside, "<h1>escaped</h1>")
+      File.symlink(outside, File.join(page_dir, "get.html.erb"))
+
+      expect { Raxon::RouteLoader.load! }
+        .to raise_error(Raxon::Error, /Refusing to load template outside routes_directory/)
+    end
+
+    it "treats a broken template symlink as no template" do
+      File.write(File.join(page_dir, "get.rb"), route_body)
+      File.symlink(File.join(@root, "missing.html.erb"), File.join(page_dir, "get.html.erb"))
+
+      expect { Raxon::RouteLoader.load! }.not_to raise_error
+      expect(Raxon::RouteLoader.routes.find("GET", "/page")).not_to be_nil
+    end
+
+    it "loads a route without a template" do
+      File.write(File.join(page_dir, "get.rb"), route_body)
+
+      expect { Raxon::RouteLoader.load! }.not_to raise_error
+      expect(Raxon::RouteLoader.routes.find("GET", "/page")).not_to be_nil
+    end
+  end
+
   describe "Raxon.load_helpers" do
     it "refuses to load a helper file that symlinks outside helpers_path" do
       helpers = File.join(@root, "helpers").tap { |d| FileUtils.mkdir_p(d) }

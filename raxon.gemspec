@@ -32,7 +32,7 @@ Gem::Specification.new do |spec|
   # JSON::Coder and JSON::Fragment (2.10) write a BigDecimal as a number.
   spec.add_dependency "json", ">= 2.10", "< 3"
   spec.add_dependency "mustermann", "~> 3"
-  spec.add_dependency "rack", "~> 3"
+  spec.add_dependency "rack", ">= 3.1.16", "< 4"
   spec.add_dependency "rackup", "~> 2"
   spec.add_dependency "thor", "~> 1"
   spec.add_dependency "tty-table", "~> 0"

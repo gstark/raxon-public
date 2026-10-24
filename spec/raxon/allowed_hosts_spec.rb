@@ -43,6 +43,28 @@ RSpec.describe "config.allowed_hosts", load_routes: true do
     expect(status_for("http://api.example.com.evil.test/x")).to eq(403)
   end
 
+  it "blocks a host whose Regexp match runs past config.regexp_timeout" do
+    Raxon.configuration.regexp_timeout = 0.01
+    Raxon.configuration.allowed_hosts = [/(a+)+\1/]
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    status = status_for("http://#{"a" * 40}!/x")
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    expect(status).to eq(403)
+    expect(elapsed).to be < 1
+  end
+
+  it "applies a changed config.regexp_timeout to a Regexp already matched" do
+    Raxon.configuration.allowed_hosts = [/(a+)+\1/]
+    Raxon.configuration.regexp_timeout = nil
+    expect(status_for("http://aa/x")).to eq(404)
+
+    Raxon.configuration.regexp_timeout = 0.01
+
+    expect(status_for("http://#{"a" * 40}!/x")).to eq(403)
+  end
+
   it "ignores X-Forwarded-Host from a peer that is not a trusted proxy" do
     Raxon.configuration.allowed_hosts = ["api.example.com"]
 

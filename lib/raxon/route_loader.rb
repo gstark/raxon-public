@@ -141,8 +141,30 @@ module Raxon
           next if already_loaded.include?(File.expand_path(file))
 
           guard_contained!(file, roots)
+          guard_template_contained!(file, roots)
           load_route_in_isolation(file)
         end
+      end
+
+      # Refuse to load a route whose ERB template companion (+get.html.erb+
+      # next to +get.rb+) resolves outside the configured routes tree. The
+      # template compiles to Ruby, so an escaping one runs code just as an
+      # escaping route file would. A broken symlink counts as no template,
+      # as it does in {compile_erb_template}.
+      #
+      # @param file [String] the globbed route file path
+      # @param roots [Array<String>] real paths of the configured routes dirs
+      # @raise [Raxon::Error] when the template resolves outside every root
+      # @return [void]
+      #
+      # @private
+      def guard_template_contained!(file, roots)
+        template = template_path_for(file)
+        return unless File.exist?(template)
+        return if PathContainment.contained?(template, roots)
+
+        raise Raxon::Error, "Refusing to load template outside routes_directory: #{template} " \
+                            "(it resolves outside the configured routes tree — check for a symlink)."
       end
 
       # Refuse to load a route file whose real path escapes the configured
@@ -523,11 +545,19 @@ module Raxon
       #
       # @private
       def compile_erb_template(endpoint, file_path)
-        template_path = file_path.sub(/\.rb$/, ".html.erb")
+        template_path = template_path_for(file_path)
         return unless File.exist?(template_path)
 
         template_content = File.read(template_path)
         endpoint.erb_template = Raxon::Template.new(template_content)
+      end
+
+      # @param file_path [String] path to a route file
+      # @return [String] path of its ERB template companion
+      #
+      # @private
+      def template_path_for(file_path)
+        file_path.sub(/\.rb\z/, ".html.erb")
       end
     end
 

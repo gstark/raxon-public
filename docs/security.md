@@ -29,8 +29,10 @@ filesystem.
 symlink placed inside the routes tree could otherwise point at, and execute, a
 file elsewhere on disk. At load time Raxon resolves each candidate file's real
 path (via `File.realpath`) and **refuses to load any file that resolves outside
-the configured routes/helpers roots**, raising `Raxon::Error`. Symlinks that
-stay within the tree are allowed; escaping ones are rejected.
+the configured routes/helpers roots**, raising `Raxon::Error`. The same check
+covers a route's ERB template (`get.html.erb` next to `get.rb`), because a
+template compiles to Ruby. Symlinks that stay within the tree are allowed;
+escaping ones are rejected. A broken template symlink counts as no template.
 
 This is defense in depth on top of "trust the directory", not a replacement for
 it.
@@ -51,6 +53,22 @@ is read, so a chunked or mis-declared length cannot bypass it. Raise the limit
 for large uploads, or set it to `nil` to disable the check (and enforce size at
 your proxy instead).
 
+### Memory used to parse a JSON body
+
+A parsed JSON body uses much more memory than its size in bytes. Raxon parses
+the body only when `request.params` (or `body_params`) is first read, and it
+converts every key to a Symbol. A 2.5 MB object with 220,000 keys grew the
+process by about 40 MB: about 22 MB for the Hash itself and about 18 MB for the
+Symbols. Ruby frees those Symbols in garbage collection, so the memory does not
+leak, but each request pays the peak while it runs.
+
+The body limit bounds one request, not many at the same time. A body made
+mostly of short keys can use about 16 times its size, so ten concurrent
+requests near the 10 MB default can use more than 1 GB. If memory
+is limited and your JSON bodies are small, lower `max_request_body_size`, or
+enforce a smaller JSON limit at your proxy and keep the larger limit for
+uploads.
+
 ## Instrumentation and the request body
 
 With `config.rails_compatible_instrumentation` on, the `start_processing`
@@ -63,7 +81,8 @@ params once the handler has resolved them.
 
 Raxon compiles the `pattern:` you declare on a string field into a validation
 regexp that runs against attacker-controlled request values, and it compiles
-your `filter_parameters` regexps against request parameter/header names. A
+your `filter_parameters` regexps against request parameter/header names. The
+Regexp entries in `config.allowed_hosts` run against the client-supplied host. A
 carelessly written, backtracking-heavy pattern could otherwise be driven into
 catastrophic backtracking and pin a CPU (ReDoS).
 
@@ -75,7 +94,8 @@ or set it to `nil` to disable.
 
 A timeout while validating a request answers 400: the client sent the value.
 A timeout in a `filter_parameters` regexp counts as a match, so the value is
-redacted.
+redacted. A timeout in an `allowed_hosts` regexp counts as no match, so the
+host is blocked with 403.
 
 Declaring `max_length` alongside `pattern:` is the cheaper defense, and Raxon
 orders the two so it actually helps: length is checked first, and a value that
@@ -248,6 +268,14 @@ the server side:
   does not serialize `env` itself, but a callback that forwards data to an
   external tracker (Sentry, etc.) must filter first — send only the specific,
   scrubbed fields you need, not the whole `env`.
+
+## Response headers
+
+`response.header` raises `ArgumentError` when the name or a value contains CR,
+LF, or NUL. A handler that copies client input into a header (a redirect
+target, a filename) therefore cannot split the response, whatever the app
+server does with those characters. Writing to `response.headers` directly
+skips this check.
 
 ## Reverse-proxy headers
 

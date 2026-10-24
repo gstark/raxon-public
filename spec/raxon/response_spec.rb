@@ -710,6 +710,38 @@ RSpec.describe Raxon::Response do
         expect(headers.keys).to eq(%w[content-type x-request-id])
       end
 
+      ["\r", "\n", "\0"].each do |char|
+        it "rejects #{char.inspect} in a header value" do
+          response = Raxon::Response.new
+
+          expect { response.header "X-Next", "/a#{char}Set-Cookie: x=1" }
+            .to raise_error(ArgumentError, /Invalid header value/)
+        end
+
+        it "rejects #{char.inspect} in a header name" do
+          response = Raxon::Response.new
+
+          expect { response.header "X-Bad#{char}Name", "value" }
+            .to raise_error(ArgumentError, /Invalid header name/)
+        end
+      end
+
+      it "rejects CR or LF in any value of a multi-value header" do
+        response = Raxon::Response.new
+
+        expect { response.header "Set-Cookie", ["a=1", "b=2\r\nX-Evil: 1"] }
+          .to raise_error(ArgumentError, /Invalid header value/)
+      end
+
+      it "accepts a multi-value header" do
+        response = Raxon::Response.new
+
+        response.header "Set-Cookie", ["a=1", "b=2"]
+
+        _status, headers, _body = response.to_rack
+        expect(headers["set-cookie"]).to eq(["a=1", "b=2"])
+      end
+
       it "replaces the default content type instead of adding a second one" do
         response = Raxon::Response.new
 

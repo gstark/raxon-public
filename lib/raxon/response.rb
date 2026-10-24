@@ -86,6 +86,11 @@ module Raxon
     HALT_BODY_UNSET = Object.new.freeze
     private_constant :HALT_BODY_UNSET
 
+    # Characters that could end a header line and start a new one (response
+    # splitting) if a server wrote them through.
+    HEADER_BREAK = /[\r\n\0]/
+    private_constant :HEADER_BREAK
+
     # Parses a JSON::Fragment into data for #validation_body.
     PARSE_FRAGMENT = lambda do |value|
       value = Raxon.sql_json_fragment(value) || value
@@ -503,11 +508,17 @@ module Raxon
     # whatever case it is given in.
     #
     # @param key [String] Header name, in any case
-    # @param value [String] Header value
+    # @param value [String, Array<String>] Header value, or one per line
+    # @raise [ArgumentError] when the name or a value contains CR, LF, or NUL
     #
     # @example
     #   response.header "X-Custom-Header", "value"
     def header(key, value)
+      raise ArgumentError, "Invalid header name #{key.inspect}: CR, LF, and NUL are not allowed" if key.to_s.match?(HEADER_BREAK)
+      if Array(value).any? { |part| part.to_s.match?(HEADER_BREAK) }
+        raise ArgumentError, "Invalid header value for #{key}: CR, LF, and NUL are not allowed"
+      end
+
       if @rack_response
         @rack_response[key] = value
       else
