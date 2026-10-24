@@ -47,13 +47,21 @@ module Raxon
 
     def initialize(hash)
       @tempfile = hash[:tempfile] || hash["tempfile"]
-      @original_filename = hash[:filename] || hash["filename"]
+      @original_filename = utf8(hash[:filename] || hash["filename"])
       @content_type = hash[:type] || hash["type"]
       @headers = hash[:head] || hash["head"]
     end
 
     def to_io
       tempfile
+    end
+
+    private
+
+    # Rack gives the file name as binary. ActionDispatch makes it UTF-8, so
+    # string methods such as ActiveSupport's parameterize work on it.
+    def utf8(name)
+      name&.dup&.force_encoding(Encoding::UTF_8)
     end
   end
 end

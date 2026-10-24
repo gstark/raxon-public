@@ -5,6 +5,8 @@ require "dry-schema"
 require "json"
 require "mustermann"
 require "rack"
+require "rack/protection"
+require "rack/session"
 require "time"
 require "uri"
 
@@ -40,10 +42,15 @@ require_relative "raxon/open_api/response_schema_generator"
 require_relative "raxon/configuration"
 require_relative "raxon/path_containment"
 require_relative "raxon/trusted_proxies"
+require_relative "raxon/error_pages"
 require_relative "raxon/error_handler"
 require_relative "raxon/handler_helpers"
 require_relative "raxon/instrumentation"
+require_relative "raxon/safe_string"
+require_relative "raxon/view_helpers"
 require_relative "raxon/template"
+require_relative "raxon/view_context"
+require_relative "raxon/view"
 require_relative "raxon/json_encoder"
 require_relative "raxon/parameter_filter"
 require_relative "raxon/request_logger"
@@ -254,6 +261,22 @@ module Raxon
   def self.reset_configuration!
     @configuration = Configuration.new
     @helpers_loaded = false
+    @view = nil
+  end
+
+  # The template finder for +config.views_path+.
+  #
+  # Built on first use, and built again when +views_path+ changes. Templates
+  # compile again when their files change if +config.reload_routes?+ is true.
+  #
+  # @return [View]
+  # @raise [Raxon::Error] when +config.views_path+ is not set
+  def self.view
+    path = configuration.views_path
+    raise Raxon::Error, "config.views_path is not set" unless path
+
+    @view = nil unless @view&.root == File.expand_path(path)
+    @view ||= View.new(path, reload: configuration.reload_routes?)
   end
 
   # Load all Raxon rake tasks

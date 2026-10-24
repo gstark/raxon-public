@@ -650,6 +650,55 @@ RSpec.describe Raxon::OpenApi::DSL do
       expect(request_body["content"]).not_to have_key("multipart/form-data")
     end
 
+    describe "request body media types" do
+      def media_types(&body)
+        described_class.endpoint do |endpoint|
+          endpoint.operation(:post)
+          endpoint.path("/books")
+          endpoint.request_body(**body.call)
+          endpoint.response(302)
+        end
+
+        described_class.to_open_api.dig("paths", "/books", "post", "requestBody", "content").keys
+      end
+
+      after { Raxon.configuration.openapi_request_content_types = ["application/json"] }
+
+      it "uses the configured media types for a body with no file" do
+        Raxon.configuration.openapi_request_content_types = ["application/x-www-form-urlencoded"]
+
+        expect(media_types { {type: :object} }).to eq(["application/x-www-form-urlencoded"])
+      end
+
+      it "uses multipart/form-data for a body with a nested file" do
+        described_class.endpoint do |endpoint|
+          endpoint.operation(:post)
+          endpoint.path("/books")
+          endpoint.request_body(type: :object) do |body|
+            body.property(:book, type: :object) do |book|
+              book.property(:cover, type: :file, required: false)
+            end
+          end
+          endpoint.response(302)
+        end
+
+        content = described_class.to_open_api.dig("paths", "/books", "post", "requestBody", "content")
+        expect(content.keys).to eq(["multipart/form-data"])
+        expect(content.dig("multipart/form-data", "schema", "properties", "book", "properties", "cover")).to include("format" => "binary")
+      end
+
+      it "uses the body's own content_type first" do
+        Raxon.configuration.openapi_request_content_types = ["application/x-www-form-urlencoded"]
+
+        expect(media_types { {type: :object, content_type: %w[application/json application/x-www-form-urlencoded]} })
+          .to eq(%w[application/json application/x-www-form-urlencoded])
+      end
+
+      it "rejects a content_type that is not a media type" do
+        expect { media_types { {type: :object, content_type: :json} } }.to raise_error(Raxon::OpenApi::Error, /Invalid content_type/)
+      end
+    end
+
     it "converts symbol status codes to numeric codes in OpenAPI output" do
       described_class.endpoint do |endpoint|
         endpoint.operation(:get)

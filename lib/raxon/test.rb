@@ -82,6 +82,32 @@ module Raxon
         @last_response || raise(Raxon::Error, "No request has been made yet")
       end
 
+      # The cookies that the next request sends, by name. A response that
+      # sets a cookie adds it here; a response that expires a cookie removes
+      # it. The jar ignores the Path and Domain attributes: every request sends
+      # every cookie. A request that gives a Cookie header sends that header
+      # instead.
+      #
+      # @return [Hash{String => String}]
+      def cookie_jar
+        @raxon_cookie_jar ||= {}
+      end
+
+      # Make a GET request to the Location of the last response.
+      #
+      # @param headers [Hash] Request headers
+      # @return [Raxon::Test::Response]
+      # @raise [Raxon::Error] when the last response is not a redirect
+      def follow_redirect!(headers: {})
+        location = last_response["location"]
+        unless last_response.status.between?(300, 399) && location
+          raise Raxon::Error, "Last response was not a redirect (status #{last_response.status})"
+        end
+
+        uri = URI.parse(location)
+        get([uri.path, uri.query].compact.join("?"), headers: headers)
+      end
+
       %w[get post put patch delete head options].each do |verb|
         # @param path [String] Request path, may include a query string
         # @param params [Hash, nil] Query params (GET/HEAD) or form params (POST/PUT/PATCH)
@@ -114,6 +140,7 @@ module Raxon
           end
         end
 
+        options["HTTP_COOKIE"] = cookie_header unless cookie_jar.empty?
         headers.each { |name, value| options[normalize_header_key(name)] = value }
 
         env = Rack::MockRequest.env_for(path, options)
@@ -122,6 +149,42 @@ module Raxon
           request_method: env["REQUEST_METHOD"],
           request_path: env["PATH_INFO"]
         )
+        store_cookies(@last_response)
+        @last_response
+      end
+
+      def cookie_header
+        cookie_jar.map { |name, value| "#{name}=#{value}" }.join("; ")
+      end
+
+      # Read each Set-Cookie header into the jar. Rack 3 gives several
+      # cookies as an Array, or as one String with a line per cookie.
+      def store_cookies(response)
+        set_cookie = response["set-cookie"]
+        return unless set_cookie
+
+        Array(set_cookie).flat_map { |header| header.split("\n") }.each do |line|
+          pair, *attributes = line.split(";").map(&:strip)
+          name, value = pair.split("=", 2)
+          if expired?(attributes)
+            cookie_jar.delete(name)
+          else
+            cookie_jar[name] = value.to_s
+          end
+        end
+      end
+
+      def expired?(attributes)
+        attributes.any? do |attribute|
+          key, value = attribute.split("=", 2)
+          case key.downcase
+          when "max-age" then value.to_i <= 0
+          when "expires" then Time.httpdate(value) <= Time.now
+          else false
+          end
+        rescue ArgumentError
+          false
+        end
       end
 
       def append_query(path, params)

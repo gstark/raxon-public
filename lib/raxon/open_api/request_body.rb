@@ -65,6 +65,12 @@ module Raxon
       #     rejected for its total.
       option :max_total_size, optional: true
 
+      # @!attribute [r] content_type
+      #    [String, Array<String>, nil] The media types that the document
+      #     gives this body. Nil uses multipart/form-data for a body with a file
+      #     field, and config.openapi_request_content_types for another body.
+      option :content_type, proc { |value| Array(value).each { |type| OpenApi::TypeSystem.process_content_type(type) } }, optional: true
+
       # @!attribute [r] extensions
       #   @return [Hash] OpenAPI specification extensions merged into the emitted
       #     schema (e.g. {"x-ts-type" => "Dayjs"}). Keys must start with "x-".

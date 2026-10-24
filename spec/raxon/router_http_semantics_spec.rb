@@ -268,6 +268,18 @@ RSpec.describe Raxon::Router, "HTTP semantics" do
       expect(headers).not_to have_key("allow")
     end
 
+    it "does not let an all.rb file without a handler answer its own path" do
+      define_route("routes/things/__id__/all.rb") do |endpoint|
+        endpoint.path_param :id, type: :string
+      end
+      define_route("routes/things/__id__/edit/get.rb") do |endpoint|
+        endpoint.handler { |request, response, metadata| response.ok id: request.params[:id] }
+      end
+
+      expect(call("GET", "/things/7").first).to eq(404)
+      expect(JSON.parse(call("GET", "/things/7/edit").last.first)).to eq({"id" => "7"})
+    end
+
     it "delegates to the fallback app instead of returning 405" do
       fallback = ->(env) { [201, {"content-type" => "text/plain"}, ["fallback"]] }
       router = Raxon::Router.new(fallback: fallback)

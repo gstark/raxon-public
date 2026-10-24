@@ -36,7 +36,16 @@ RSpec.describe Raxon::OpenApi::DSL, ".from_table" do
       "boolean" => "boolean",
       "timestamp(6) without time zone" => "datetime",
       "date" => "date",
-      "jsonb" => "object"
+      "jsonb" => "object",
+      # SQLite and MySQL report other names, sometimes in upper case.
+      "INTEGER" => "integer",
+      "int(11)" => "integer",
+      "float" => "number",
+      "decimal(10,2)" => "number",
+      "varchar" => "string",
+      "TEXT" => "string",
+      "datetime(6)" => "datetime",
+      "tinyint(1)" => "boolean"
     }.each do |sql_type, expected_type|
       it "maps #{sql_type} columns to :#{expected_type}" do
         resource = Class.new do

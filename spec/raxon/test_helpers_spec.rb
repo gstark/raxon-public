@@ -152,6 +152,78 @@ RSpec.describe Raxon::Test do
     end
   end
 
+  describe "cookie jar" do
+    before do
+      define_route("routes/cookies/get.rb") do |endpoint|
+        endpoint.handler do |request, response, metadata|
+          response.ok cookies: request.cookies
+        end
+      end
+
+      define_route("routes/cookies/post.rb") do |endpoint|
+        endpoint.handler do |request, response, metadata|
+          response.set_cookie "flavor", value: "oat", path: "/"
+          response.set_cookie "size", value: "large", path: "/"
+          response.ok({})
+        end
+      end
+
+      define_route("routes/cookies/delete.rb") do |endpoint|
+        endpoint.handler do |request, response, metadata|
+          response.delete_cookie "flavor", path: "/"
+          response.ok({})
+        end
+      end
+    end
+
+    it "sends the cookies that earlier responses set" do
+      post "/cookies"
+      get "/cookies"
+
+      expect(last_response.json["cookies"]).to eq({"flavor" => "oat", "size" => "large"})
+    end
+
+    it "removes a cookie that a response expires" do
+      post "/cookies"
+      delete "/cookies"
+      get "/cookies"
+
+      expect(cookie_jar).to eq({"size" => "large"})
+      expect(last_response.json["cookies"]).to eq({"size" => "large"})
+    end
+
+    it "sends a Cookie header given to the request instead of the jar" do
+      post "/cookies"
+      get "/cookies", headers: {"Cookie" => "flavor=rye"}
+
+      expect(last_response.json["cookies"]).to eq({"flavor" => "rye"})
+    end
+  end
+
+  describe "#follow_redirect!" do
+    before do
+      define_route("routes/old/get.rb") do |endpoint|
+        endpoint.handler do |request, response, metadata|
+          response.redirect "http://example.org/users?page=3", 303
+        end
+      end
+    end
+
+    it "makes a GET request to the path and query of the Location" do
+      get "/old"
+      follow_redirect!
+
+      expect(last_response.request_path).to eq("/users")
+      expect(last_response.json).to eq({"users" => ["alice"], "page" => 3})
+    end
+
+    it "raises when the last response is not a redirect" do
+      get "/users"
+
+      expect { follow_redirect! }.to raise_error(Raxon::Error, /not a redirect/)
+    end
+  end
+
   describe "conform_to_response_schema matcher" do
     it "passes when the body matches the declared schema" do
       get "/users", params: {page: 1}

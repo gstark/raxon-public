@@ -223,6 +223,13 @@ The `$param` syntax is also supported for backwards compatibility, but dunder st
 routes/api/v1/users/$id/get.rb           → GET /api/v1/users/{id}
 ```
 
+A dunder parameter can have a file extension after it. The segment then matches the parameter and the extension. It outranks a segment that is only a parameter, so the two routes below can live side by side:
+
+```
+routes/__id__/__slug__.md/get.rb         → GET /{id}/{slug}.md
+routes/__id__/__slug__/get.rb            → GET /{id}/{slug}
+```
+
 Path parameters are automatically extracted and available in `request.path_params` and the merged `request.params` convenience hash:
 
 ```ruby
@@ -233,6 +240,8 @@ end
 ```
 
 See [Path Parameters Documentation](docs/path_parameters.md) for more details.
+
+**Which route answers.** A static path always wins over a dynamic one. When two dynamic routes both match a path, the router compares their segments from left to right. A static segment outranks a segment that mixes text and a parameter (`__name__.json`), and that outranks a segment that is only a parameter. So `routes/books/__book_id__/pages/__id__/get.rb` answers `/books/1/pages/2`, and `routes/__book_id__/__book_slug__/__id__/__slug__/get.rb` answers `/1/my-book/2/my-page`. Between routes of equal specificity, the one registered first answers.
 
 Every dynamic filename segment is also a required OpenAPI path parameter and
 is validated as a string by default. Add `path_param` only when refining that
@@ -300,7 +309,7 @@ endpoint.handler do |request, response|
 end
 ```
 
-Available status code symbols: `:ok`, `:created`, `:accepted`, `:no_content`, `:bad_request`, `:unauthorized`, `:forbidden`, `:not_found`, `:unprocessable_entity`, `:internal_server_error`, and [many more](lib/raxon/response.rb#L22-L89).
+Available status code symbols: `:ok`, `:created`, `:accepted`, `:no_content`, `:bad_request`, `:unauthorized`, `:forbidden`, `:not_found`, `:unprocessable_entity` (or `:unprocessable_content`), `:internal_server_error`, and [many more](lib/raxon/response.rb#L22-L89).
 
 ### Early Response Termination
 
@@ -439,6 +448,8 @@ An `all.rb` file registers an endpoint for every HTTP method (GET, POST, PUT, PA
 
 - **Parent of the matched route.** For a request to a deeper path, such as `GET /api/v1/users` with `routes/api/v1/all.rb`, the `all.rb` contributes its `metadata`, `before`, and `after` blocks, plus inherited defaults such as `security`. Its `handler` does **not** run.
 - **The matched route itself.** When no more specific file matches, such as `DELETE /api/v1` with no `delete.rb`, the `all.rb` handler is the final handler.
+
+An `all.rb` file without a `handler` has only the first role. A request for its own path gets 404, or 405 when a method file exists there, as if the `all.rb` file were absent.
 
 > [!WARNING]
 > Put cross-cutting logic in `before` and `after` blocks, never in `handler`. A parent `all.rb` handler does not run for child routes, so an authentication check there leaves every child route open.
@@ -716,6 +727,81 @@ Create a template file with the same path but `.html.erb` extension:
 - Automatically sets `Content-Type: text/html`
 - ERB syntax supports all standard Ruby code
 
+#### Views, partials, and layouts
+
+For an application with many pages, keep templates in one directory and wrap them in a layout:
+
+```ruby
+# config/app.rb
+Raxon.configure do |config|
+  config.views_path = "app/views"
+  config.layout = "layouts/application"   # nil (the default) renders without a layout
+end
+```
+
+```ruby
+# routes/books/__id__/get.rb
+Raxon.route do
+  handler do |request, response|
+    response.render "books/show", book: Book.find(request.params[:id])
+  end
+end
+```
+
+`response.render` finds `app/views/books/show.html.erb`, renders it, wraps it in the layout, and sets it as the HTML body. It takes `layout:` (a name, or `false` for none) and `status:`. With no template name it renders the route's own `get.html.erb`.
+
+`format:` renders a template in another format. `response.render "books/show", format: :md, book: book` finds `app/views/books/show.md.erb`, renders it without a layout, and sets the content type that `Rack::Mime` gives `.md`. Rack does not know `.md`, so register it once: `Rack::Mime::MIME_TYPES[".md"] = "text/markdown"`. The output is escaped as in HTML. Use `raw` for content that must not be escaped.
+
+To pick a format from the Accept header, as Rails does with `respond_to`, use `request.accepts?`. A wildcard such as `*/*` does not match.
+
+```ruby
+if request.accepts?("text/vnd.turbo-stream.html")
+  response.render "leaves/update", format: :turbo_stream, leaf: leaf
+else
+  response.no_content
+end
+```
+
+```erb
+<%# app/views/books/show.html.erb %>
+<% content_for :title do %><%= book.title %><% end %>
+<%= render "books/cover", book: book %>
+
+<%# app/views/books/_cover.html.erb (a partial: the file name starts with "_") %>
+<img src="<%= book.cover_url %>" alt="">
+
+<%# app/views/layouts/application.html.erb %>
+<title><%= yield :title %></title>
+<main><%= yield %></main>
+```
+
+- `render "dir/name", **locals` in a template renders the partial `dir/_name.html.erb`. A block given to `render` is what `yield` returns in the partial.
+- `content_for :name` stores content (a block, or a value). `yield :name` in the layout reads it. `content_for?(:name)` tells whether it is set.
+- The layout gets the same locals as the template.
+- `request` and `response` are available in every template.
+
+**Helpers.** Templates render on a `Raxon::ViewContext`, which includes `Raxon::ViewHelpers`. Reopen that module (for example in a file under `config.helpers_path`) to add helpers:
+
+```ruby
+module Raxon::ViewHelpers
+  def link_to(text, href)
+    raw(%(<a href="#{h(href)}">#{h(text)}</a>))
+  end
+
+  def card(&block)
+    raw(%(<div class="card">#{capture(&block)}</div>))
+  end
+end
+```
+
+```erb
+<%= card do %><%= link_to book.title, "/books/#{book.id}" %><% end %>
+```
+
+**Escaping.** `<%= %>` escapes every value unless the value answers `html_safe?` with true. Rendered templates, partials, `capture`, `raw`, `h`, and `safe_join` return a `Raxon::SafeString`, so their output is not escaped twice. A helper that builds markup must escape its inputs with `h` and wrap the result with `raw`. `ActiveSupport::SafeBuffer` counts as safe too.
+
+Templates compile once. They compile again when their file changes if `config.reload_routes?` is true. A template name that leaves `views_path`, or a template that symlinks outside it, raises `Raxon::Error`.
+
 **Mix JSON and HTML in the same application:**
 
 ```ruby
@@ -736,6 +822,37 @@ Raxon.route do |endpoint|
   end
 end
 ```
+
+### Sessions and CSRF Protection
+
+Set `config.session_secret` to give each browser a session. The secret must be at least 64 bytes. Raxon then adds an encrypted cookie session (`Rack::Session::Cookie` from rack-session) and a CSRF check (`Rack::Protection::AuthenticityToken`).
+
+```ruby
+Raxon.configure do |config|
+  config.session_secret = ENV.fetch("SESSION_SECRET")
+  config.session_options = {key: "app.session", expire_after: 30 * 24 * 3600}
+end
+```
+
+- `request.session` is a hash that persists between requests. Keys are strings, because the cookie stores the session as JSON.
+- `request.reset_session` clears the session and gives it a new id. Call it when a user signs in or out.
+- `config.session_options` merges over the defaults: `key: "raxon.session"`, `path: "/"`, `httponly: true`, and `same_site: :lax`.
+
+With a session, a POST, PUT, PATCH, or DELETE request must send a CSRF token, or it gets a 403. Send the token in the `authenticity_token` form field or in the `X-CSRF-Token` header. The router runs this check, after it applies `max_request_body_size` and refuses file parts that the route does not declare. An over-limit body gets a 413 before the token is read. Middleware that you add with `use` sees the request before the check. Templates get the token from two helpers:
+
+```erb
+<head>
+  <%= csrf_meta_tags %>
+</head>
+
+<form method="post" action="/session">
+  <input type="hidden" name="authenticity_token" value="<%= csrf_token %>">
+</form>
+```
+
+`csrf_meta_tags` writes the `csrf-param` and `csrf-token` meta tags that Turbo and `@rails/request.js` read. Set `config.csrf_protection = false` to turn the check off, for example for an API that does not use cookies.
+
+Raxon does not include `Rack::MethodOverride`. An application can add it in `config.ru`, so a form can send `_method=delete`. That middleware reads the form body before Raxon does, so `max_request_body_size` and the file-part guard do not apply to that read. Put a body-size limit in front of it, for example at the proxy.
 
 ### Streaming Responses
 
@@ -805,6 +922,28 @@ end
 ```
 
 The block receives `(exception, request, response, metadata)`; trailing arguments may be omitted. Unhandled exceptions fall through to `on_error` and the standard 500 response.
+
+### HTML Error Pages
+
+An app that serves browsers can use static error pages, like `public/404.html` and `public/500.html` in Rails:
+
+```ruby
+Raxon.configure do |config|
+  config.error_pages_path = "public"
+
+  config.rescue_from(ActiveRecord::RecordNotFound) do |exception, request, response|
+    response.error_page(:not_found)
+  end
+end
+```
+
+A request with `text/html` in its `Accept` header then gets `<status>.html` from that directory:
+
+- An unmatched route gets `404.html`. A `config.not_found` block still takes precedence.
+- An unhandled exception gets `500.html`.
+- `response.error_page(status)` sets the status and the page. It does not halt.
+
+Other requests, and statuses with no page, keep the JSON error, for example `{"error":"Not Found"}`.
 
 ### Conditional GET (ETag / Last-Modified)
 
@@ -1116,6 +1255,7 @@ The generated document describes the real API surface:
 - Middleware-only route files — an `all.rb` that registers only `before`/`metadata` blocks and has no handler — are excluded, as is the programmatic catchall.
 - When a route file and a DSL-declared endpoint document the same path and method, the route wins: it is the enforced implementation.
 - A response declared without a `description:` gets the standard HTTP reason phrase for its status code ("OK", "Not Found", …), since OpenAPI requires the field.
+- A request body with a `type: :file` field, at any depth, is documented as `multipart/form-data`. Another body uses `config.openapi_request_content_types`, which is `["application/json"]` by default. An HTML application sets it to `["application/x-www-form-urlencoded"]` for its forms. A body can name its own media types with `body type: :object, content_type: [...]`. These settings change only the document. Raxon parses JSON, URL-encoded, and multipart bodies in all cases.
 
 ### Operation Metadata
 
@@ -1132,6 +1272,8 @@ endpoint.security :oauth2, scopes: ["users:read"]
 ```
 
 The concise `Raxon.route` DSL supports the same methods without the `endpoint.` prefix.
+
+`exclude_from_openapi` leaves a route out of the document, for example an HTML page. In an `all.rb` file, it applies to every route below it. A child route can call `exclude_from_openapi false` to come back in. The route still serves requests.
 
 ### Security Schemes
 
@@ -1401,6 +1543,7 @@ end
 - `openapi_type_extensions` - Hash mapping DSL type names to specification-extension hashes applied to every schema of that type, e.g. `{datetime: {"x-ts-type" => "Dayjs"}}` (default: `{}`). See [Specification Extensions](#specification-extensions).
 - `logger` - Application logger (default: `nil`). When set, `Raxon::Server` logs every request through `Raxon::RequestLogger`, a `Rack::CommonLogger` that writes `[FILTERED]` for query values whose keys match `filter_parameters`, and `Raxon::ErrorHandler` logs unhandled exceptions to it. Without a logger, `Raxon::ErrorHandler` writes unhandled exceptions to the Rack error stream (`env["rack.errors"]`), which Puma sends to stderr.
 - `not_found` - Block customizing the 404 response for unmatched requests (see [HTTP Semantics](#http-semantics))
+- `error_pages_path` - Directory of static error pages named by status, such as `public` (default: `nil`). HTML requests get `404.html` and `500.html` from it (see [HTML Error Pages](#html-error-pages))
 - `rescue_from(ExceptionClass) { |exception, request, response, metadata| ... }` - Map a domain exception to a response (see [Mapping Exceptions to Responses](#mapping-exceptions-to-responses))
 - `reload_routes` - Route hot reloading: `nil` (default) enables it in development only; `true`/`false` force it on or off (see [Hot Reloading](#hot-reloading))
 - `eager_compile` - Compile every route's request schemas, response schemas, and path patterns when the router is built: `nil` (default) does it in production only; `true`/`false` force it on or off. Without it, each schema compiles on the first request that needs it. Under Puma's `preload_app!`, each worker then compiles all of them again after the fork. With it, the workers share one compiled copy, and a route whose `as:` names an unknown component fails at boot instead of on its first request. Response schemas compile only for endpoints where response validation can run. Call `Raxon::RouteLoader.compile!` to do it yourself.
@@ -1632,7 +1775,7 @@ use Raxon::ErrorHandler, logger: Logger.new($stdout)
 **Error handler features:**
 
 - Catches all unhandled exceptions
-- Returns secure 500 JSON response: `{"error": "Internal Server Error"}`
+- Returns secure 500 JSON response: `{"error": "Internal Server Error"}`, or `500.html` to an HTML request when `error_pages_path` is set
 - Never leaks exception details to clients
 - Optionally logs full error details server-side
 - Supports custom error notification callbacks
@@ -1963,6 +2106,8 @@ end
 - `last_response` exposes `status`, `headers`, `body`, `json(symbolize_names: false)`, and case-insensitive header lookup via `last_response["Content-Type"]`.
 - `conform_to_response_schema(status = nil)` fails with a precise message when the status differs, no route matches, the endpoint declares no schema for that status, or the body violates the declared schema.
 - The app under test defaults to `Raxon::Server.new`; define your own `app` method to customize.
+- A cookie jar keeps the cookies that responses set, and sends them with each later request, so a session persists across requests in one example. `cookie_jar` returns the jar as a hash. The jar ignores the cookie `Path` and `Domain` attributes. A `Cookie` header given to a request replaces the jar for that request.
+- `follow_redirect!` makes a GET request to the `Location` of the last response. It raises `Raxon::Error` when the last response is not a redirect.
 
 Non-RSpec frameworks can `require "raxon/test"` for the helpers without the matcher, or drive the server directly with `Rack::MockRequest.env_for` + `server.call(env)`.
 

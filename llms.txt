@@ -143,7 +143,7 @@ bundle exec raxon generate route api/v1/users/__id__ get
 
 ## Docs
 
-- [README](README.md): full reference — routing, the OpenAPI DSL, validation, handler helpers, hooks, HTML rendering, test helpers, and every configuration option.
+- [README](README.md): full reference — routing, the OpenAPI DSL, validation, handler helpers, hooks, HTML rendering (views, partials, layouts, `content_for`, `Raxon::ViewHelpers`), sessions and CSRF protection, HTML error pages (`error_pages_path`, `response.error_page`), `exclude_from_openapi`, test helpers (cookie jar, `follow_redirect!`), and every configuration option.
 - [Request lifecycle](docs/lifecycle.md): exact order of metadata, before, handler, after, and where `halt` and `rescue_from` cut in.
 - [Path parameters](docs/path_parameters.md): the `__name__` and `$name` directory forms, and how parameters reach `request.params`.
 - [Streaming responses](docs/streaming.md): `response.stream` and `response.sse` for chunked bodies and Server-Sent Events, what the lifecycle skips for a stream, and how to declare the response in OpenAPI.

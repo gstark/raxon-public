@@ -84,6 +84,19 @@ RSpec.describe Raxon::RouteLoader do
       expect(route_data[:params]).to eq({id: "456"})
     end
 
+    it "registers a dunder parameter with a file extension as a mixed segment" do
+      Raxon::RouteLoader.define("routes/books/__id__/__slug__.md/get.rb") { |endpoint| endpoint.description "Markdown" }
+      Raxon::RouteLoader.define("routes/books/__id__/__slug__/get.rb") { |endpoint| endpoint.description "HTML" }
+
+      markdown = Raxon::RouteLoader.routes.find("GET", "/books/7/handbook.md")
+      html = Raxon::RouteLoader.routes.find("GET", "/books/7/handbook")
+
+      expect(markdown[:endpoint].path).to eq("/books/{id}/{slug}.md")
+      expect(markdown[:params]).to eq({id: "7", slug: "handbook"})
+      expect(html[:endpoint].path).to eq("/books/{id}/{slug}")
+      expect(html[:params]).to eq({id: "7", slug: "handbook"})
+    end
+
     it "registers a route with multiple dunder-style path parameters" do
       file_path = "routes/api/v1/orgs/__org_id__/projects/__project_id__/get.rb"
       block = proc do |endpoint|

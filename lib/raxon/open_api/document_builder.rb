@@ -99,7 +99,7 @@ module Raxon
         # on a path+method collision the route — the real, enforced
         # implementation — wins over a documentation-only declaration.
         (declared + routed).each_with_object({}) do |endpoint, paths|
-          next if middleware_only_route?(endpoint)
+          next if middleware_only_route?(endpoint) || excluded?(endpoint)
 
           if endpoint.path.nil? || endpoint.path.empty?
             raise Error, "OpenAPI endpoint has no path (operations: #{endpoint.operations.join(", ")}). " \
@@ -123,6 +123,15 @@ module Raxon
       # @return [Boolean]
       def middleware_only_route?(endpoint)
         !endpoint.route_file_path.nil? && endpoint.handler_block.nil?
+      end
+
+      # Whether the endpoint, or an all.rb above it, called exclude_from_openapi.
+      #
+      # @param endpoint [Endpoint]
+      # @return [Boolean]
+      def excluded?(endpoint)
+        effective = endpoint.effective_endpoint if endpoint.respond_to?(:effective_endpoint)
+        effective ? effective.excluded_from_openapi? : endpoint.openapi_excluded == true
       end
 
       # Build an operation hash for an endpoint.
@@ -234,18 +243,20 @@ module Raxon
         {
           description: request_body.description.to_s,
           required: request_body.required,
-          content: {
-            request_body_media_type(request_body) => {schema: SchemaEmitter.schema_without_description(request_body)}
-          }
+          content: request_body_media_types(request_body).to_h { |type| [type, {schema: SchemaEmitter.schema_without_description(request_body)}] }
         }
       end
 
-      # Return the OpenAPI media type for a request body definition.
+      # The OpenAPI media types of a request body: its own content_type, else
+      # multipart/form-data when it carries a file, else the configured types.
       #
       # @param request_body [RequestBody] The request body definition
-      # @return [String] OpenAPI media type
-      def request_body_media_type(request_body)
-        (request_body.type == "multipart") ? "multipart/form-data" : "application/json"
+      # @return [Array<String>] OpenAPI media types
+      def request_body_media_types(request_body)
+        return request_body.content_type if request_body.content_type
+        return ["multipart/form-data"] if request_body.type == "multipart" || RequestSchemaGenerator.file_fields?(request_body)
+
+        Array(Raxon.configuration.openapi_request_content_types)
       end
 
       # Build the components section of the OpenAPI specification.

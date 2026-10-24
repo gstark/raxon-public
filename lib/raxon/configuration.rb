@@ -6,7 +6,8 @@ module Raxon
     # can read into memory. Applications that accept larger uploads should raise
     # max_request_body_size; set it to nil to disable the check entirely.
     DEFAULT_MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024
-    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :on_error, :helpers_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trusted_proxies, :allowed_hosts, :max_request_body_size, :logger, :schema_adapter, :regexp_timeout, :wrap_error_handler, :path_parameter_defaults, :validation_error_profiles, :body_serializer
+    DEFAULT_SESSION_OPTIONS = {key: "raxon.session", path: "/", httponly: true, same_site: :lax}.freeze
+    attr_accessor :routes_directory, :openapi_title, :openapi_description, :openapi_version, :openapi_spec_version, :openapi_type_extensions, :openapi_request_content_types, :on_error, :helpers_path, :views_path, :layout, :error_pages_path, :root, :rails_compatible_instrumentation, :response_validation, :expose_validation_details, :filter_parameters, :trusted_proxies, :allowed_hosts, :max_request_body_size, :logger, :schema_adapter, :regexp_timeout, :wrap_error_handler, :path_parameter_defaults, :validation_error_profiles, :body_serializer, :session_secret, :session_options, :csrf_protection
     alias_method :routes_directories, :routes_directory
     alias_method :routes_directories=, :routes_directory=
 
@@ -28,8 +29,30 @@ module Raxon
       #     date: {"x-ts-type" => "Dayjs"}
       #   }
       @openapi_type_extensions = {}
+      # Media types that the document gives a request body with no file field.
+      # Raxon parses JSON, URL-encoded form, and multipart bodies, so an HTML
+      # application can document its forms:
+      #
+      #   config.openapi_request_content_types = ["application/x-www-form-urlencoded"]
+      #
+      # A body with a file field is always multipart/form-data. A body can name
+      # its own media types with content_type:.
+      @openapi_request_content_types = ["application/json"]
       @on_error = nil
       @helpers_path = nil
+      # Directory of the templates that Response#render finds by name, for
+      # example "app/views". Partials and layouts live here too.
+      @views_path = nil
+      # Layout that Response#render wraps every template in, for example
+      # "layouts/application". Nil renders without a layout. A route can pass
+      # layout: to override it.
+      @layout = nil
+      # Directory of static error pages named by status, for example
+      # "public" with public/404.html and public/500.html. When set, a request
+      # that accepts text/html gets the page for an unmatched route (404), an
+      # unhandled exception (500), and Response#error_page. Other requests, and
+      # statuses with no page, get the JSON error.
+      @error_pages_path = nil
       @root = nil
       @rails_compatible_instrumentation = false
       # Response validation runs the endpoint's response schema over every
@@ -138,6 +161,19 @@ module Raxon
       # serializer, but response validation sees the resource object, so set
       # one when such a route is validated.
       @body_serializer = nil
+      # Secret for the session cookie, at least 64 bytes. When set,
+      # Raxon::Server adds an encrypted cookie session (Rack::Session::Cookie)
+      # and Request#session reads it. Nil (default) means no session.
+      @session_secret = nil
+      # Options for Rack::Session::Cookie, for example +expire_after:+ or
+      # +secure:+. They merge over DEFAULT_SESSION_OPTIONS.
+      @session_options = {}
+      # When true (default) and a session_secret is set, Raxon::Router runs
+      # Rack::Protection::AuthenticityToken. A POST, PUT, PATCH, or DELETE must
+      # then send the token from ViewContext#csrf_token, in the
+      # +authenticity_token+ form field or the X-CSRF-Token header, or it gets
+      # a 403. Set false to turn the check off.
+      @csrf_protection = true
     end
 
     # Register a named request-validation HTTP contract. Route ancestors opt

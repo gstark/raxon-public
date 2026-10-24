@@ -50,6 +50,8 @@ module Raxon
       # is that RAXON_DEBUG has to be set before the router is built, which is
       # how it was already used: the server builds one router at boot.
       @debug = !ENV["RAXON_DEBUG"].nil?
+      # The CSRF check, run from #csrf_rejection rather than as middleware.
+      @csrf_check = Rack::Protection::AuthenticityToken.new(nil)
     end
 
     # Rack application entry point.
@@ -82,6 +84,9 @@ module Raxon
 
         # If a fallback app is configured, delegate to it for unmatched routes
         if fallback
+          rejection = csrf_rejection(env, rack_request)
+          return rejection if rejection
+
           debug_log { "[Raxon] No route match for #{rack_request.request_method} #{rack_request.path}, delegating to fallback" }
           result = fallback.call(env)
           debug_log { "[Raxon] Fallback returned: status=#{result[0]}, headers=#{result[1].inspect}, body_class=#{result[2].class}" }
@@ -115,6 +120,8 @@ module Raxon
       effective_endpoint = route_data[:effective_endpoint] || endpoint
 
       reject_file_parts(rack_request, effective_endpoint)
+      rejection = csrf_rejection(env, rack_request)
+      return rejection if rejection
 
       wrapper_request = Raxon::Request.new(rack_request, effective_endpoint)
       wrapper_response = Raxon::Response.new(endpoint)
@@ -304,9 +311,38 @@ module Raxon
       rack_request.set_header(Rack::RACK_MULTIPART_TEMPFILE_FACTORY, REJECT_FILE_PARTS)
     end
 
+    # Run the CSRF check, when config.session_secret is set and
+    # config.csrf_protection is on. It runs here, not as middleware outside the
+    # router, because AuthenticityToken reads the form body to find the token,
+    # and that read must go through the body-size limit and the file-part
+    # guard. The form is parsed first because AuthenticityToken#accepts?
+    # rescues every error into a 403; here an over-limit body answers 413 and a
+    # malformed one 400. Rack caches the parsed form for the handler.
+    #
+    # @param env [Hash]
+    # @param rack_request [Rack::Request]
+    # @return [Array, nil] The rejection response, or nil to continue
+    def csrf_rejection(env, rack_request)
+      config = Raxon.configuration
+      return unless config.session_secret && config.csrf_protection
+      return if @csrf_check.safe?(env)
+
+      rack_request.params
+      return if @csrf_check.accepts?(env)
+
+      @csrf_check.instrument(env)
+      @csrf_check.react(env)
+    rescue Raxon::RequestBodyTooLarge
+      payload_too_large_response
+    rescue Rack::BadRequest => e
+      malformed_request_response(e)
+    end
+
     def execute_catchall(env, rack_request)
       endpoint = Raxon::RouteLoader.catchall
       reject_file_parts(rack_request, endpoint)
+      rejection = csrf_rejection(env, rack_request)
+      return rejection if rejection
 
       wrapper_request = Raxon::Request.new(rack_request, endpoint)
       wrapper_response = Raxon::Response.new(endpoint)
@@ -357,7 +393,7 @@ module Raxon
 
     def not_found_response(rack_request)
       handler = Raxon.configuration.not_found_handler
-      return default_not_found_response unless handler
+      return ErrorPages.rack_response(404, rack_request.env) unless handler
 
       request = Raxon::Request.new(rack_request)
       response = Raxon::Response.new
@@ -379,14 +415,6 @@ module Raxon
         403,
         {"content-type" => "application/json"},
         [%({"error":"Blocked host"})]
-      ]
-    end
-
-    def default_not_found_response
-      [
-        404,
-        {"content-type" => "application/json"},
-        [%({"error":"Not Found"})]
       ]
     end
 

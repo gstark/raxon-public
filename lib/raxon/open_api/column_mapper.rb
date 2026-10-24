@@ -73,19 +73,21 @@ module Raxon
       # instead of crashing document generation, which is what previously
       # happened for common types like uuid, json, and bare numeric.
       #
+      # The names cover PostgreSQL, SQLite, and MySQL, in any letter case.
+      # MySQL stores a boolean as tinyint(1), so that check comes before the
+      # integer check.
+      #
       # @param sql_type [String] The database column's SQL type
       # @return [Symbol] The OpenAPI element type
       def openapi_element_for_sql_type(sql_type)
-        case sql_type
-        when "integer", "bigint", "smallint"
-          :integer
-        when "double precision", "real", "numeric", /\Anumeric\(.*\)/
-          :number
-        when "string", "text", /character varying/
-          :string
-        when "boolean"
+        case sql_type.to_s.downcase
+        when "boolean", "bool", "tinyint(1)"
           :boolean
-        when /\Atimestamp/
+        when /\A(big|small|medium|tiny)?int(eger)?\b/
+          :integer
+        when /\A(double|real|float|numeric|decimal)/
+          :number
+        when /\A(timestamp|datetime)/
           :datetime
         when "date"
           :date

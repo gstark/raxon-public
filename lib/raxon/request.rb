@@ -449,6 +449,37 @@ module Raxon
       type == "application/json" || (type.start_with?("application/") && type.end_with?("+json"))
     end
 
+    # Check if the Accept header names a media type.
+    #
+    # The type must be listed by name, with a quality above zero. A
+    # wildcard such as +*/*+ does not match, so a browser's default Accept
+    # header does not ask for every format. Use this to pick a response
+    # format, as Rails does with +respond_to+.
+    #
+    # @param media_type [String] The media type, such as "text/vnd.turbo-stream.html"
+    # @return [Boolean] True if the client asks for the media type
+    #
+    # @example
+    #   if request.accepts?("text/vnd.turbo-stream.html")
+    #     response.render "leaves/update", format: :turbo_stream
+    #   end
+    def accepts?(media_type)
+      self.class.accepts?(header("HTTP_ACCEPT"), media_type)
+    end
+
+    # Check if an Accept header value names a media type. See {#accepts?}.
+    #
+    # @param accept [String, nil] The Accept header value
+    # @param media_type [String] The media type
+    # @return [Boolean]
+    def self.accepts?(accept, media_type)
+      accept.to_s.split(",").any? do |entry|
+        type, *parameters = entry.split(";").map(&:strip)
+        quality = parameters.find { |parameter| parameter.start_with?("q=") }
+        type.to_s.casecmp?(media_type) && (quality.nil? || quality.delete_prefix("q=").to_f > 0)
+      end
+    end
+
     # Get the request body.
     # Delegates to Rack::Request#body
     #
@@ -482,6 +513,26 @@ module Raxon
     # @return [Hash] The request cookies
     def cookies
       @rack_request.cookies
+    end
+
+    # The session. It persists between requests in an encrypted cookie.
+    #
+    # Keys are strings: the cookie stores the session as JSON, so a symbol key
+    # comes back as a string on the next request.
+    #
+    # @return [Rack::Session::Abstract::SessionHash]
+    # @raise [Raxon::Error] when config.session_secret is not set
+    def session
+      env[Rack::RACK_SESSION] || raise(Raxon::Error, "No session: set config.session_secret to enable sessions")
+    end
+
+    # Clear the session and give it a new id. Call this when a user signs in
+    # or out, so that a session from before is not reused.
+    #
+    # @return [void]
+    def reset_session
+      session.clear
+      env[Rack::RACK_SESSION_OPTIONS][:renew] = true
     end
 
     # Get the request scheme (http or https).

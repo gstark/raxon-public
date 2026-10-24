@@ -55,6 +55,16 @@ RSpec.describe Raxon::Response do
       }.to raise_error(ArgumentError, /Unknown status code symbol/)
     end
 
+    it "accepts both names for 422" do
+      response = Raxon::Response.new
+
+      response.code = :unprocessable_content
+      expect(response.status_code).to eq(422)
+
+      response.code = :unprocessable_entity
+      expect(response.status_code).to eq(422)
+    end
+
     it "supports all 1xx status codes" do
       response = Raxon::Response.new
 

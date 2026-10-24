@@ -539,6 +539,36 @@ RSpec.describe Raxon::Request do
     end
   end
 
+  describe "#accepts?" do
+    def request_accepting(accept)
+      Raxon::Request.new(Rack::Request.new(Rack::MockRequest.env_for("/test", "HTTP_ACCEPT" => accept)))
+    end
+
+    it "is true for a listed media type" do
+      request = request_accepting("text/vnd.turbo-stream.html, text/html, application/xhtml+xml")
+
+      expect(request.accepts?("text/vnd.turbo-stream.html")).to be(true)
+      expect(request.accepts?("text/html")).to be(true)
+    end
+
+    it "is false for a type that is not listed, or listed with quality zero" do
+      request = request_accepting("text/html, application/json;q=0")
+
+      expect(request.accepts?("text/vnd.turbo-stream.html")).to be(false)
+      expect(request.accepts?("application/json")).to be(false)
+    end
+
+    it "does not match a wildcard" do
+      expect(request_accepting("*/*").accepts?("text/html")).to be(false)
+    end
+
+    it "is false without an Accept header" do
+      request = Raxon::Request.new(Rack::Request.new(Rack::MockRequest.env_for("/test")))
+
+      expect(request.accepts?("text/html")).to be(false)
+    end
+  end
+
   describe "#json?" do
     it "returns true for application/json" do
       rack_request = Rack::MockRequest.env_for("/test", "CONTENT_TYPE" => "application/json")

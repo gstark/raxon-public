@@ -50,6 +50,7 @@ module Raxon
         @deprecated = false
         @security = nil
         @validate_response = nil
+        @openapi_excluded = nil
         @responses = {}
         @default_responses = {}
         @static_metadata = {}
@@ -168,6 +169,19 @@ module Raxon
 
         @validate_response = args[0]
       end
+
+      # Leave this endpoint out of the OpenAPI document, for example an HTML
+      # page. In an all.rb file, it applies to every route below it. A child
+      # route can call exclude_from_openapi(false) to come back in.
+      #
+      # @param value [Boolean]
+      # @return [Boolean]
+      def exclude_from_openapi(value = true)
+        @openapi_excluded = value
+      end
+
+      # @return [Boolean, nil] the value set by {#exclude_from_openapi}, or nil
+      attr_reader :openapi_excluded
 
       def validation_profile(name = nil)
         return @validation_profile if name.nil?

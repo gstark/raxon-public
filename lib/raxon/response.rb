@@ -61,6 +61,8 @@ module Raxon
       im_a_teapot: 418,
       misdirected_request: 421,
       unprocessable_entity: 422,
+      unprocessable_content: 422, # RFC 9110 name; Rails 7.1+ uses it
+
       locked: 423,
       failed_dependency: 424,
       too_early: 425,
@@ -85,6 +87,10 @@ module Raxon
 
     HALT_BODY_UNSET = Object.new.freeze
     private_constant :HALT_BODY_UNSET
+
+    # The layout argument of #render when the caller gives none.
+    DEFAULT_LAYOUT = Object.new.freeze
+    private_constant :DEFAULT_LAYOUT
 
     # Characters that could end a header line and start a new one (response
     # splitting) if a server wrote them through.
@@ -246,6 +252,27 @@ module Raxon
       respond_with(status, {error: message})
     end
 
+    # Set an error response from config.error_pages_path: the HTML page for an
+    # HTML request when the page exists, otherwise a `{ error: reason }` body.
+    # It does not halt.
+    #
+    # @param status [Symbol, Integer] HTTP status code
+    # @return [Response] self for chaining
+    #
+    # @example Serve public/404.html for a missing record
+    #   config.rescue_from(ActiveRecord::RecordNotFound) do |error, request, response|
+    #     response.error_page(:not_found)
+    #   end
+    def error_page(status)
+      self.code = status
+      if (html = request && ErrorPages.page(code, request.rack_request.env))
+        self.html_body = html
+      else
+        self.body = {error: ErrorPages.reason(code)}
+      end
+      self
+    end
+
     # Set the response body to HTML content and update content-type header.
     # This is a convenience method that sets both the body and content-type in one call.
     #
@@ -279,7 +306,58 @@ module Raxon
         raise Raxon::Error, "Template not found"
       end
 
-      @endpoint.erb_template.render(locals)
+      @endpoint.erb_template.render(locals, view_context)
+    end
+
+    # Render a template, wrap it in the layout, and set it as the HTML body.
+    #
+    # With a name, the template is found under +config.views_path+. Without
+    # one, it is the route's own template (+get.html.erb+ next to +get.rb+).
+    # The template, its partials, and the layout share one {ViewContext}, so
+    # they can call {ViewHelpers}, and +content_for+ in the template reaches
+    # +yield+ in the layout.
+    #
+    # A +format+ other than +:html+ renders +name.<format>.erb+ without a
+    # layout, unless one is given, and sets the content type that
+    # +Rack::Mime+ gives the format. Register a type that Rack does not know:
+    # +Rack::Mime::MIME_TYPES[".md"] = "text/markdown"+. Output is still
+    # escaped; use +raw+ for content that must not be.
+    #
+    # @param template [String, nil] Template name relative to +config.views_path+
+    # @param layout [String, false, nil] Layout name. Defaults to
+    #   +config.layout+ for HTML and to none for other formats. False or nil
+    #   renders without a layout.
+    # @param status [Symbol, Integer, nil] Status code to set
+    # @param format [Symbol, String] The template format
+    # @param locals [Hash{Symbol => Object}] Local variables for the template and the layout
+    # @return [SafeString] The rendered body
+    # @raise [Raxon::Error] when a template or layout is missing
+    #
+    # @example
+    #   response.render "books/show", book: book
+    #   response.render "sessions/new", status: :unprocessable_content, layout: "layouts/bare"
+    #   response.render "books/show", format: :md, book: book
+    def render(template = nil, layout: DEFAULT_LAYOUT, status: nil, format: View::DEFAULT_FORMAT, **locals)
+      html = format.to_s == View::DEFAULT_FORMAT
+      compiled = template ? Raxon.view.template(template, format: format) : @endpoint&.erb_template
+      raise Raxon::Error, "Template not found" unless compiled
+
+      layout = (html ? Raxon.configuration.layout : nil) if layout.equal?(DEFAULT_LAYOUT)
+      context = view_context
+      body = if layout
+        Raxon.view.render_with_layout(compiled, locals: locals, layout: layout, context: context)
+      else
+        compiled.render(locals, context)
+      end
+
+      self.code = status if status
+      if html
+        self.html_body = body
+      else
+        header "content-type", Rack::Mime.mime_type(".#{format}", "text/plain")
+        @custom_body = body
+      end
+      body
     end
 
     # Stream the body instead of buffering it.
@@ -706,6 +784,13 @@ module Raxon
     #   response.redirect "/login", 302
     def redirect(target, status = 302)
       rack_response.redirect(target, status)
+    end
+
+    private
+
+    def view_context
+      view = Raxon.configuration.views_path ? Raxon.view : nil
+      ViewContext.new(view: view, request: @request, response: self)
     end
   end
 end

@@ -26,6 +26,52 @@ release.
   - Prevents malformed JSON from reaching handlers
 - Code complexity analysis tool (flog) with rake task
 - Enhanced Server middleware support for keyword arguments
+- Views, partials, and layouts. `config.views_path` names a template
+  directory and `config.layout` a default layout. `response.render(name, layout:,
+  status:, **locals)` renders a template inside the layout and sets the HTML
+  body. In templates, `render "dir/name"` renders the partial
+  `dir/_name.html.erb`, `content_for`/`yield :name` pass content to the layout,
+  and `capture` collects a block's output, so a helper called with
+  `<%= helper do %>` can wrap it.
+- `Raxon::ViewHelpers`. Templates render on a `Raxon::ViewContext` that
+  includes this module, so applications can add template helpers. Templates
+  also see `request` and `response`.
+- `Raxon::SafeString`. `<%= %>` does not escape a value whose `html_safe?` is
+  true, so rendered partials and helper markup are not escaped twice.
+- Sessions and CSRF protection. `config.session_secret` turns on an
+  encrypted cookie session (rack-session) and
+  `Rack::Protection::AuthenticityToken`. `request.session` and
+  `request.reset_session` read and reset the session. Templates get
+  `csrf_token` and `csrf_meta_tags`. `config.session_options` and
+  `config.csrf_protection` change the cookie and turn the check off. The
+  router runs the CSRF check after `max_request_body_size` and the file-part
+  guard, so reading the token cannot parse an over-limit body or write an
+  undeclared file part to disk.
+- `ViewContext#concat` appends a value to the template output, for helpers
+  that build content in a block.
+- HTML error pages. `config.error_pages_path` names a directory of
+  `<status>.html` pages. A request that accepts text/html gets `404.html` for
+  an unmatched route and `500.html` for an unhandled exception.
+  `response.error_page(status)` serves a page from a route or `rescue_from`.
+  Other requests keep the JSON error.
+- `endpoint.exclude_from_openapi` leaves a route out of the OpenAPI document.
+  In an all.rb it applies to the routes below it.
+- A route directory such as `__slug__.md` becomes the path segment `{slug}.md`.
+  Use it to serve another format of a page, for example `/{id}/{slug}.md`.
+- `response.render(name, format: :md)` renders `name.md.erb` without a layout and
+  sets the content type from `Rack::Mime`.
+- `request.accepts?(media_type)` is true when the Accept header names the
+  type with a quality above zero. A wildcard does not match. Use it to pick a
+  response format, as Rails does with `respond_to`.
+- `:unprocessable_content` is a status symbol for 422, next to
+  `:unprocessable_entity`.
+- Specs for nested form params (`book[title]`, `book[tags][]`): they are
+  validated, coerced, and stripped like JSON bodies.
+- `SafeString#+` returns a `SafeString` and escapes an unsafe argument, as
+  `ActiveSupport::SafeBuffer` does. Before, `safe + safe` was a plain String
+  and the template escaped it.
+- `Raxon::Test` keeps a cookie jar between requests (`cookie_jar`) and adds
+  `follow_redirect!`.
 - Streaming responses. `response.stream(content_type:) { |out| ... }` records a
   block that runs inside the Rack body's `each`, after the status and headers
   are on the wire; each `out.write` reaches the client at once. The Router
@@ -47,6 +93,21 @@ release.
   `Response` rejected it as an unknown option.
 
 ### Changed
+
+- When two dynamic routes match one path, the more specific route answers.
+  Segments compare left to right: a static segment outranks a mixed segment
+  (`{name}.json`), which outranks a bare parameter. Before, the route
+  registered first answered, and route files register in path order, so
+  `routes/__a__/__b__/get.rb` caught `/books/1` before
+  `routes/books/__id__/get.rb`. Routes of equal specificity still answer in
+  registration order.
+
+- A route's sibling template (`get.html.erb`) now renders on a
+  `Raxon::ViewContext` instead of a bare object. It can call
+  `Raxon::ViewHelpers`, `request`, and `response`, and `<%= %>` no longer
+  escapes a value whose `html_safe?` is true. `Raxon::Template#render` returns
+  a `Raxon::SafeString` and takes an optional context as a second positional
+  argument.
 
 - Response validation rejects keys the schema does not declare, at any depth,
   including inside referenced components. Before, Dry::Schema ignored them, so
@@ -167,6 +228,13 @@ release.
 
 ### Fixed
 
+- An `all.rb` file without a handler no longer answers requests for its own
+  path. Before, `routes/books/__id__/all.rb` with only a `path_param` made
+  `GET /books/7` answer 200 with an empty body. It now gets 404, or 405 when a
+  method file exists at that path.
+- `Raxon::UploadedFile#original_filename` is UTF-8. Rack gives it as binary,
+  so `"café.jpg".parameterize` and other ActiveSupport string methods raised
+  `ArgumentError`. ActionDispatch makes the same change.
 - A request integer no longer truncates a fraction. `4.5` for a `type:
   :integer` field answered as `4`; it now fails with "must be an integer".
   A whole `4.0` still coerces to `4`.

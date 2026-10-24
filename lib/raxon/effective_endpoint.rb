@@ -18,6 +18,7 @@ module Raxon
       @security, security_source = nearest(:security)
       @validate_response, validation_source = nearest(:validate_response)
       @validation_profile, profile_source = nearest(:validation_profile)
+      @openapi_excluded = nearest(:openapi_excluded).first == true
       check_validation_profile!(profile_source)
       @static_metadata, metadata_sources = compose_static_metadata
       @provenance = {parameters: parameter_sources, responses: response_sources,
@@ -42,6 +43,9 @@ module Raxon
     # Whether this endpoint declares anything to validate, answered without
     # compiling the schema.
     def request_schema? = @request_schema.declared?
+
+    # Whether the route file or the nearest all.rb called exclude_from_openapi.
+    def excluded_from_openapi? = @openapi_excluded
 
     # Whether a bare GET can skip resolution. See Request#simple_get_without_validation?.
     def path_params_only? = @path_params_only

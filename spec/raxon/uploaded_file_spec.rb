@@ -33,6 +33,19 @@ RSpec.describe Raxon::UploadedFile do
     end
   end
 
+  it "gives the original filename as UTF-8, as ActionDispatch does" do
+    tempfile = Tempfile.new("upload")
+    filename = "café.jpg".b
+
+    uploaded = Raxon::UploadedFile.new(tempfile: tempfile, filename: filename)
+
+    expect(uploaded.original_filename).to eq("café.jpg")
+    expect(uploaded.original_filename.encoding).to eq(Encoding::UTF_8)
+    expect(filename.encoding).to eq(Encoding::BINARY)
+
+    tempfile.close!
+  end
+
   describe ".rack_file_hash?" do
     it "requires a readable tempfile and filename" do
       tempfile = Tempfile.new("upload")

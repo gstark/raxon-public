@@ -57,7 +57,8 @@ module Raxon
 
     private
 
-    # Handle an exception by logging it and returning a JSON error response.
+    # Handle an exception by logging it and returning a 500 response: the
+    # 500.html error page for an HTML request (see ErrorPages), otherwise JSON.
     #
     # @param error [StandardError] The exception that was raised
     # @param env [Hash] Rack environment hash
@@ -66,11 +67,7 @@ module Raxon
       log_error(error, env)
       notify_error(error, env)
 
-      [
-        500,
-        {"content-type" => "application/json"},
-        [JSON.generate({error: "Internal Server Error"})]
-      ]
+      ErrorPages.rack_response(500, env)
     end
 
     # Log the error with details, to the logger when one is configured and to

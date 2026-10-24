@@ -33,6 +33,8 @@ Gem::Specification.new do |spec|
   spec.add_dependency "json", ">= 2.10", "< 3"
   spec.add_dependency "mustermann", "~> 3"
   spec.add_dependency "rack", ">= 3.1.16", "< 4"
+  spec.add_dependency "rack-protection", "~> 4"
+  spec.add_dependency "rack-session", "~> 2"
   spec.add_dependency "rackup", "~> 2"
   spec.add_dependency "thor", "~> 1"
   spec.add_dependency "tty-table", "~> 0"

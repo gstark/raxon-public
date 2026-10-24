@@ -455,7 +455,7 @@ RSpec.describe "Raxon.route with the docs/lifecycle.md all.rb example" do
       Raxon::RouteLoader.reset!
       Raxon::RouteLoader.load!
 
-      family = Raxon::RouteLoader.routes.find("DELETE", "/api/orders/7")[:endpoint]
+      family = Raxon::RouteLoader.routes.all[{method: "ALL", path: "/api/orders/{id}"}][:endpoint]
       expect(family.default_responses[404].properties).to include(:error)
 
       status, _headers, body = Raxon::Router.new.call(Rack::MockRequest.env_for("/api/orders/7"))

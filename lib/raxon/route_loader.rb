@@ -10,6 +10,10 @@ module Raxon
     # registry until the load finishes. See {load!}.
     STAGING_KEY = :raxon_route_staging
 
+    # A dunder parameter with a file extension after it, such as
+    # "__slug__.md", becomes the mixed segment "{slug}.md".
+    DUNDER_WITH_EXTENSION = /\A__(\w+)__(\.[A-Za-z0-9]+)\z/
+
     class << self
       attr_accessor :catchall
       attr_writer :registered_files, :routes
@@ -491,6 +495,9 @@ module Raxon
           if param_name
             param_names << param_name
             "{#{param_name}}"
+          elsif (match = DUNDER_WITH_EXTENSION.match(part))
+            param_names << match[1]
+            "{#{match[1]}}#{match[2]}"
           else
             part
           end

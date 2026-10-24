@@ -211,11 +211,28 @@ module Raxon
           prepared: {}
         }
         if entry[:dynamic]
-          entry[:order] = @dynamic_entries.length
-          @dynamic_entries << entry
+          entry[:rank] = [segment_ranks(path), @dynamic_entries.length].freeze
+          insert_at = @dynamic_entries.bsearch_index { |other| (other[:rank] <=> entry[:rank]) > 0 }
+          @dynamic_entries.insert(insert_at || @dynamic_entries.length, entry)
           index_dynamic_entry(entry)
         end
         entry
+      end
+    end
+
+    # How specific each segment of a path template is: 0 for a static segment,
+    # 1 for a segment that mixes text and a parameter (`{name}.json`), 2 for a
+    # segment that is only a parameter. Compared left to right, a lower array
+    # is the more specific route, so `/books/{id}` outranks `/{id}/{slug}`.
+    def segment_ranks(path)
+      path.split("/", -1).map do |segment|
+        if !segment.include?("{")
+          0
+        elsif PURE_PARAM_SEGMENT.match?(segment)
+          2
+        else
+          1
+        end
       end
     end
 
@@ -287,8 +304,9 @@ module Raxon
     end
 
     def prepare_entry_routes(entry)
+      all = answering_all(entry)
       SUPPORTED_METHODS.each do |method|
-        endpoint = entry[:methods][method] || entry[:all]
+        endpoint = entry[:methods][method] || all
         next unless endpoint
 
         hierarchy = endpoint_hierarchy(entry[:path], method, endpoint)
@@ -330,27 +348,29 @@ module Raxon
     # match. Mustermann still decides, and still extracts the params, so a
     # candidate that reaches it is answered exactly as before.
     #
-    # Candidates come back in registration order because that is the order the
-    # linear scan used, and the first pattern to match wins. Two patterns can
-    # both match one path — `/a/{b}/c` and `/a/x/{c}` — and which of them
-    # answers is behavior, not an implementation detail.
+    # Candidates come back in rank order, and the first pattern to match wins.
+    # Two patterns can both match one path — `/a/{b}/c` and `/a/x/{c}` — and
+    # which of them answers is behavior, not an implementation detail. The
+    # rank compares segments left to right: a static segment outranks a
+    # parameter at the same position, so `/a/x/{c}` wins. Between routes of
+    # equal specificity, the one registered first wins.
     #
     # @param path [String]
     # @return [Array<Hash>] Entries whose shape admits this path
     def dynamic_candidates(path)
       # Narrowing is not free: it splits the path and builds an array to hold
       # the result. Below a handful of patterns, asking all of them costs less
-      # than working out which to ask, so the scan stays. This is the same
-      # linear scan as before, on the same entries, in the same order.
+      # than working out which to ask, so the scan stays. @dynamic_entries is
+      # kept in rank order, so the scan asks the most specific pattern first.
       return @dynamic_entries if @dynamic_entries.length <= LINEAR_SCAN_LIMIT
 
       found = []
       collect_candidates(@dynamic_root, path.split("/", -1), 0, found)
       found.concat(@unindexable_entries) unless @unindexable_entries.empty?
       # Static is walked before dynamic, so anything drawn from both branches
-      # arrives out of registration order. One candidate is the common case and
-      # needs no sorting.
-      found.sort_by! { |entry| entry[:order] } if found.length > 1
+      # arrives out of rank order. One candidate is the common case and needs
+      # no sorting.
+      found.sort_by! { |entry| entry[:rank] } if found.length > 1
       found
     end
 
@@ -390,7 +410,7 @@ module Raxon
     end
 
     def sort_index_entries(node)
-      node[:entries].sort_by! { |entry| entry[:order] } if node[:entries].length > 1
+      node[:entries].sort_by! { |entry| entry[:rank] } if node[:entries].length > 1
     end
 
     def new_index_node
@@ -410,11 +430,21 @@ module Raxon
     end
 
     def entry_methods(entry)
-      return SUPPORTED_METHODS.dup if entry[:all]
+      return SUPPORTED_METHODS.dup if answering_all(entry)
 
       methods = entry[:methods].keys
       methods += ["HEAD"] if methods.include?("GET")
       methods
+    end
+
+    # The all.rb endpoint that answers requests for its own path. An all.rb
+    # file without a handler only gives its blocks to the routes below it, so
+    # a request for its own path gets 404 or 405, as if the file were absent.
+    def answering_all(entry)
+      all = entry[:all]
+      return all if all.nil? || all.handler_block
+
+      all unless all.route_file_path
     end
 
     def endpoint_hierarchy(path_pattern, method, final_endpoint)
@@ -478,7 +508,7 @@ module Raxon
 
     def find_all_pattern_candidate(method, path, candidates)
       candidates.each do |entry|
-        endpoint = entry[:all]
+        endpoint = answering_all(entry)
         next unless endpoint
 
         match = pattern_for(entry).match(path)

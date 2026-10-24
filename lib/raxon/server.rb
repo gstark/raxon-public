@@ -133,6 +133,8 @@ module Raxon
         end
       end
 
+      new_app = session_stack(new_app)
+
       # Request logging wraps the whole stack when a logger is configured
       if (logger = Raxon.configuration.logger)
         new_app = Raxon::RequestLogger.new(new_app, logger)
@@ -141,6 +143,21 @@ module Raxon
       # Delete multipart tempfiles when the response body closes, rather than
       # when the garbage collector finds them.
       Rack::TempfileReaper.new(new_app)
+    end
+
+    # Wrap the app in the session cookie, when config.session_secret is set.
+    # The session is outermost, so the app's own middleware and the router can
+    # read it. The CSRF check is not middleware: it reads the form body, so the
+    # Router runs it after its body-size limit and file-part guard.
+    #
+    # @param app [#call]
+    # @return [#call]
+    def session_stack(app)
+      config = Raxon.configuration
+      return app unless config.session_secret
+
+      options = Configuration::DEFAULT_SESSION_OPTIONS.merge(config.session_options)
+      Rack::Session::Cookie.new(app, **options, secrets: config.session_secret, serialize_json: true)
     end
 
     # Whether to auto-wrap the router in Raxon::ErrorHandler: only when enabled

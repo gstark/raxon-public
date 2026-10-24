@@ -141,4 +141,19 @@ RSpec.describe "Path Parameters Integration" do
     expect(request.params[:include]).to eq("posts")
     expect(request.params[:limit]).to eq("10")
   end
+
+  it "routes to a nested route file over a root-level dynamic one that sorts first" do
+    define_route("routes/__book_id__/__book_slug__/__id__/__slug__/get.rb") do |endpoint|
+      endpoint.handler { |request, response| response.body = {route: "slugged", params: request.params.slice(:book_id, :id)} }
+    end
+    define_route("routes/books/__book_id__/pages/__id__/get.rb") do |endpoint|
+      endpoint.handler { |request, response| response.body = {route: "nested", params: request.params.slice(:book_id, :id)} }
+    end
+
+    nested = Raxon::Router.new.call(Rack::MockRequest.env_for("/books/1/pages/2"))
+    slugged = Raxon::Router.new.call(Rack::MockRequest.env_for("/1/my-book/2/my-page"))
+
+    expect(JSON.parse(nested.last.first)).to eq("route" => "nested", "params" => {"book_id" => "1", "id" => "2"})
+    expect(JSON.parse(slugged.last.first)).to eq("route" => "slugged", "params" => {"book_id" => "1", "id" => "2"})
+  end
 end

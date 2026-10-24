@@ -703,16 +703,17 @@ RSpec.describe Raxon::Routes, "with more dynamic routes than the linear scan lim
     expect(routes.find("GET", "/api/health")[:endpoint]).to equal(endpoint)
   end
 
-  # Two patterns can admit one path. Which answers is registration order, and
-  # the index has to preserve it rather than preferring the more specific.
-  it "keeps registration order when two patterns both match" do
+  # Two patterns can admit one path. A static segment outranks a parameter at
+  # the same position, whatever the registration order.
+  it "prefers the more specific pattern when two patterns both match" do
     register_resources
     general = Raxon::OpenApi::Endpoint.new
     specific = Raxon::OpenApi::Endpoint.new
     routes.register("GET", "/api/{resource}/{id}/settings", general)
     routes.register("GET", "/api/resource1/{id}/settings", specific)
 
-    expect(routes.find("GET", "/api/resource1/5/settings")[:endpoint]).to equal(general)
+    expect(routes.find("GET", "/api/resource1/5/settings")[:endpoint]).to equal(specific)
+    expect(routes.find("GET", "/api/other/5/settings")[:endpoint]).to equal(general)
   end
 
   # A segment that merely contains a parameter cannot be indexed by equality,
@@ -804,5 +805,53 @@ RSpec.describe "Percent-encoded path parameters through the router" do
 
   it "answers 400 for a value that is not UTF-8" do
     expect(id_for("/users/%FF")).to eq([400, nil])
+  end
+end
+
+RSpec.describe Raxon::Routes, "precedence between dynamic routes" do
+  subject(:routes) { described_class.new }
+
+  def register(template)
+    Raxon::OpenApi::Endpoint.new.tap { |endpoint| routes.register("GET", template, endpoint) }
+  end
+
+  it "prefers a static segment over a parameter at the same position" do
+    slugged = register("/{book_id}/{book_slug}/{id}/{slug}")
+    nested = register("/books/{book_id}/pages/{id}")
+
+    expect(routes.find("GET", "/books/1/pages/2")[:endpoint]).to equal(nested)
+    expect(routes.find("GET", "/1/my-book/2/my-page")[:endpoint]).to equal(slugged)
+  end
+
+  it "decides by the first segment that differs" do
+    later_static = register("/{a}/x/{b}")
+    first_static = register("/x/{a}/{b}")
+
+    expect(routes.find("GET", "/x/x/1")[:endpoint]).to equal(first_static)
+    expect(routes.find("GET", "/y/x/1")[:endpoint]).to equal(later_static)
+  end
+
+  it "prefers a segment that mixes text and a parameter over a bare parameter" do
+    bare = register("/files/{name}")
+    mixed = register("/files/{name}.json")
+
+    expect(routes.find("GET", "/files/report.json")[:endpoint]).to equal(mixed)
+    expect(routes.find("GET", "/files/report")[:endpoint]).to equal(bare)
+  end
+
+  it "keeps the same precedence once the index is in use" do
+    12.times { |i| register("/filler#{i}/{id}") }
+    slugged = register("/{book_id}/{book_slug}/{id}/{slug}")
+    nested = register("/books/{book_id}/pages/{id}")
+
+    expect(routes.find("GET", "/books/1/pages/2")[:endpoint]).to equal(nested)
+    expect(routes.find("GET", "/1/my-book/2/my-page")[:endpoint]).to equal(slugged)
+  end
+
+  it "keeps registration order between patterns of equal specificity" do
+    first = register("/{a}/{b}")
+    register("/{c}/{d}")
+
+    expect(routes.find("GET", "/1/2")[:endpoint]).to equal(first)
   end
 end
