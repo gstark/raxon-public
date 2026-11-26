@@ -74,7 +74,17 @@ Path parameters use the dunder form `__name__`; the legacy `$name` form works
 but trips on shell expansion.
 
 An `all.rb` holds `before`/`after`/`metadata` blocks shared by everything below
-it. With no `handler` it is middleware only and is not itself a route.
+it. With no `handler` it is middleware only and is not itself a route. A
+`handler` in an `all.rb` answers only its own path, for the methods with no
+route file there; it never runs for a route below it.
+
+When several dynamic routes match one path, the most specific template wins,
+whatever the load order: compare segments from the left, and at the first that
+differs a static segment beats a mixed one (`{name}.json`), which beats a pure
+parameter (`{id}`). So `admin/users/__id__/get.rb` answers `GET
+/admin/users/7` before `admin/__resource__/__id__/get.rb`. The lookup tries, in
+order: a route file for the method, then an `all.rb` with a handler, then (for
+HEAD) a `get.rb`; each pass goes from the most specific route to the least.
 
 ## The two DSL forms are equivalent
 

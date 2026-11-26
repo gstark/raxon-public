@@ -243,6 +243,17 @@ See [Path Parameters Documentation](docs/path_parameters.md) for more details.
 
 **Which route answers.** A static path always wins over a dynamic one. When two dynamic routes both match a path, the router compares their segments from left to right. A static segment outranks a segment that mixes text and a parameter (`__name__.json`), and that outranks a segment that is only a parameter. So `routes/books/__book_id__/pages/__id__/get.rb` answers `/books/1/pages/2`, and `routes/__book_id__/__book_slug__/__id__/__slug__/get.rb` answers `/1/my-book/2/my-page`. Between routes of equal specificity, the one registered first answers.
 
+The lookup for a method makes three passes over the matching dynamic routes, each from the most specific to the least:
+
+1. A route file for the method (`get.rb`, `patch.rb`, and so on).
+2. An `all.rb` with a `handler`.
+3. For `HEAD`, a `get.rb` (the automatic HEAD).
+
+The first pass that finds a route answers. So a method file of a less specific route beats an `all.rb` handler of a more specific one: with `admin/__resource__/__id__/patch.rb` and a handler in `admin/users/__id__/all.rb`, `PATCH /admin/users/7` runs the generic `patch.rb`.
+
+> [!WARNING]
+> The `before`, `after`, and `metadata` blocks that run are those of the `all.rb` files on the template path of the route that answers, not on the request path. When the generic `admin/__resource__/__id__/get.rb` answers `GET /admin/schools/7`, a guard in `admin/schools/all.rb` does not run. Put a guard at a level that every matching route shares, such as `admin/all.rb`.
+
 Every dynamic filename segment is also a required OpenAPI path parameter and
 is validated as a string by default. Add `path_param` only when refining that
 default (for example, an integer type, enum, pattern, or description).
@@ -575,15 +586,11 @@ Raxon.route do |endpoint|
       response.header "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
       response.header "Access-Control-Allow-Headers", "Content-Type, Authorization"
     end
-
-    # Answer OPTIONS preflight requests before any route handler runs
-    if request.rack_request.request_method == "OPTIONS"
-      response.code = :no_content
-      response.halt
-    end
   end
 end
 ```
+
+A `before` block runs only for a request that matches a route. A preflight `OPTIONS` request to a path with no `options.rb` gets the automatic `204` without these headers, so answer preflight requests in an `options.rb` or in middleware.
 
 The headers are set in a `before` block so that they are on every response, including one that a later `before` block halts. A `security` requirement runs before every route `before` block, so a preflight to a route that requires authentication gets a 401 before this code runs. For that case, and for anything beyond the basics, prefer the maintained [`rack-cors`](https://github.com/cyu/rack-cors) middleware over hand-rolled headers. It answers preflights before Raxon sees the request.
 
@@ -638,6 +645,9 @@ end
 # For DELETE /api/v1/users (no delete.rb exists):
 # 1. all.rb before blocks run
 # 2. all.rb handler runs (final handler)
+# If all.rb has no handler, DELETE /api/v1/users matches no route: the
+# router answers 405 with an Allow header (or hands it to the fallback app),
+# and the all.rb before blocks do not run.
 ```
 
 #### Best Practices
@@ -886,8 +896,8 @@ See the [Streaming Responses guide](docs/streaming.md) for the SSE writer, error
 Raxon answers protocol-level requests correctly without any per-route code:
 
 - **405 Method Not Allowed** — when a path exists but the requested method has no route, the router responds `405` with an `Allow` header listing the methods that would succeed (instead of a misleading 404). A configured catchall route or fallback app still takes precedence.
-- **Automatic HEAD** — a `HEAD` request to a path with only a `get.rb` runs the GET handler and strips the body, per RFC 9110. An explicit `head.rb` or `all.rb` always wins.
-- **Automatic OPTIONS** — an `OPTIONS` request to a known path with no `options.rb`/`all.rb` gets a `204` with the `Allow` header. Define your own `options.rb` (e.g. for CORS preflight) to take over.
+- **Automatic HEAD** — a `HEAD` request to a path with only a `get.rb` runs the GET handler and strips the body, per RFC 9110. An explicit `head.rb`, or an `all.rb` with a handler, always wins.
+- **Automatic OPTIONS** — an `OPTIONS` request to a known path with no `options.rb` and no `all.rb` with a handler gets a `204` with the `Allow` header. Define your own `options.rb` (e.g. for CORS preflight) to take over.
 
 ### Custom 404 Responses
 

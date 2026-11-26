@@ -322,9 +322,9 @@ module Raxon
       prepare_head_fallback(entry)
     end
 
-    # A path with a GET route but no HEAD or all route still answers HEAD
-    # requests by running the GET handler; the Router strips the body from the
-    # response (marked here with head_from_get).
+    # A path with a GET route but no HEAD route and no all route with a handler
+    # still answers HEAD requests by running the GET handler; the Router strips
+    # the body from the response (marked here with head_from_get).
     #
     # HEAD shares GET's prepared route, so it uses the same EffectiveEndpoint
     # and the schemas GET compiled. It built a second one before, and that one
@@ -482,6 +482,11 @@ module Raxon
 
     # Find a route by pattern matching with parameter extraction.
     #
+    # Three passes, each over the matching entries from the most specific to
+    # the least: a route file for the method, then an all.rb with a handler,
+    # then (for HEAD) a GET route. A pass that finds a route ends the search, so
+    # a less specific method route still beats a more specific all.rb handler.
+    #
     # @param method [String] HTTP method
     # @param path [String] Request path
     # @return [Hash, nil] Route data with extracted params if found, nil otherwise
@@ -518,8 +523,9 @@ module Raxon
       nil
     end
 
-    # HEAD requests with no explicit HEAD or all route fall back to the GET
-    # route; the prepared HEAD entry carries the head_from_get marker.
+    # HEAD requests with no explicit HEAD route and no all route with a handler
+    # fall back to the GET route; the prepared HEAD entry carries the
+    # head_from_get marker.
     def find_head_fallback_candidate(method, path, candidates)
       return nil unless method == "HEAD"
 

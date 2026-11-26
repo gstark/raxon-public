@@ -49,7 +49,10 @@ Route lifecycle blocks (`metadata`, `before`, `after`) run for every endpoint in
 
 ## `all.rb` behavior
 
-`all.rb` registers an endpoint for every HTTP method at that path.
+`all.rb` applies to every HTTP method. With a `handler`, it answers each method
+that has no route file at its own path. Without a `handler`, it is middleware
+only and is not a route of its own: a request that matches no other route at
+its path gets a 404 or a 405, and its blocks do not run for that request.
 
 When an `all.rb` endpoint is a parent of a more specific match, it behaves as a parent lifecycle endpoint:
 
@@ -104,11 +107,28 @@ validation_profile :uploads
 A `validation_profile` name that is not registered raises `Raxon::Error` when
 the routes load. Register profiles before the routes load.
 
-When an `all.rb` endpoint is the selected endpoint, its handler runs:
+When an `all.rb` endpoint has a handler and is the selected endpoint, its handler runs:
 
 ```text
 routes/api/all.rb # final handler for POST /api when no post.rb exists
 ```
+
+## Which route answers
+
+A static path matches first. When several dynamic routes match one path, the
+most specific template answers, whatever order the files load in. Raxon
+compares the templates segment by segment from the left, and the first segment
+that differs decides: a static segment beats a mixed segment (`{name}.json`),
+which beats a pure parameter segment (`{id}`). So `admin/users/__id__/get.rb`
+answers `GET /admin/users/7` before `admin/__resource__/__id__/get.rb`.
+
+The lookup makes three passes, each from the most specific route to the least:
+a route file for the method, then an `all.rb` with a handler, then (for `HEAD`)
+a `get.rb`. The first pass that finds a route answers.
+
+The hierarchy of the route that answers follows its template path, not the
+request path. When `admin/__resource__/__id__/get.rb` answers
+`GET /admin/schools/7`, the blocks of `admin/schools/all.rb` do not run.
 
 ## Request context and metadata
 
